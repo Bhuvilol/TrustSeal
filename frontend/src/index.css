@@ -1,0 +1,149 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-deep: #070a16;
+  --bg-grid: rgba(255, 255, 255, 0.035);
+  --card: #0f172a;
+  --card-soft: #111b30;
+  --text-main: #eef3ff;
+  --text-muted: #9bb2d3;
+  --accent: #7c6bff;
+  --accent-strong: #5de4ff;
+  --danger: #ef4444;
+  --glow: rgba(93, 228, 255, 0.28);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--text-main);
+  background-color: var(--bg-deep);
+  background-image:
+    radial-gradient(circle at 25% 18%, rgba(93, 228, 255, 0.16), transparent 36%),
+    radial-gradient(circle at 78% 12%, rgba(124, 107, 255, 0.16), transparent 32%),
+    radial-gradient(circle at 45% 62%, rgba(21, 244, 199, 0.1), transparent 34%),
+    repeating-linear-gradient(0deg, var(--bg-grid), var(--bg-grid) 1px, transparent 1px, transparent 40px),
+    repeating-linear-gradient(90deg, var(--bg-grid), var(--bg-grid) 1px, transparent 1px, transparent 40px),
+    radial-gradient(circle at 50% -10%, rgba(255, 255, 255, 0.04), transparent 40%),
+    var(--bg-deep);
+  font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+  position: relative;
+  overflow-x: hidden;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.03), transparent 40%, rgba(255, 255, 255, 0.05));
+  mix-blend-mode: screen;
+  opacity: 0.5;
+}
+
+@keyframes alertPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.36);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(250, 204, 21, 0);
+  }
+}
+
+@keyframes criticalShake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-1px);
+  }
+  75% {
+    transform: translateX(1px);
+  }
+}
+
+.animate-critical-shake {
+  animation: criticalShake 0.24s ease-in-out;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.glass {
+  backdrop-filter: blur(14px);
+  background: linear-gradient(140deg, rgba(16, 33, 51, 0.65), rgba(20, 42, 63, 0.75));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.glow-border {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 10px 45px rgba(34, 211, 238, 0.18);
+}
+
+.bg-orb {
+  position: absolute;
+  width: 360px;
+  height: 360px;
+  filter: blur(120px);
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.38), transparent 60%);
+  opacity: 0.7;
+}
+
+.grid-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(0deg, var(--bg-grid), var(--bg-grid) 1px, transparent 1px, transparent 40px),
+    repeating-linear-gradient(90deg, var(--bg-grid), var(--bg-grid) 1px, transparent 1px, transparent 40px);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-slate-700/60 bg-surface-700/90 shadow-panel backdrop-blur-md;
+  }
+
+  .panel-soft {
+    @apply rounded-2xl border border-slate-700/50 bg-surface-600/70 shadow-panel backdrop-blur-md;
+  }
+
+  .input-field {
+    @apply w-full rounded-xl border border-slate-600 bg-surface-800/80 px-4 py-3 text-sm text-slate-100 outline-none transition duration-300 focus:border-brand-300 focus:ring-2 focus:ring-brand-300/30;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  }
+
+  .btn-primary {
+    @apply relative inline-flex items-center justify-center overflow-hidden rounded-xl bg-brand-500 px-4 py-2.5 font-semibold text-slate-950 transition duration-300 hover:-translate-y-0.5 hover:bg-brand-400 hover:shadow-[0_10px_26px_rgba(46,196,175,0.35)] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .btn-secondary {
+    @apply relative inline-flex items-center justify-center overflow-hidden rounded-xl border border-slate-600 bg-surface-700 px-4 py-2.5 font-semibold text-slate-100 transition duration-300 hover:-translate-y-0.5 hover:border-brand-300/65 hover:text-brand-300 hover:shadow-[0_8px_22px_rgba(20,184,166,0.25)] active:scale-[0.985];
+  }
+
+  .pill {
+    @apply rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.18em] text-slate-200;
+  }
+
+  .glass-card {
+    @apply rounded-2xl border border-white/10 bg-white/5 shadow-panel backdrop-blur-xl;
+  }
+
+  .status-badge {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+    animation: alertPulse 2.8s ease-in-out infinite;
+  }
+}
