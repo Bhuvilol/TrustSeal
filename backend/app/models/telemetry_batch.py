@@ -20,10 +20,9 @@ class TelemetryBatch(Base):
     batch_hash = Column(String, nullable=False, index=True)
     ipfs_cid = Column(String, nullable=True, index=True)
     tx_hash = Column(String, nullable=True, index=True)
-    status = Column(String, nullable=False, default="pending_ipfs_anchor", index=True)
+    status = Column(String, nullable=False, default="finalized", index=True)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     anchored_at = Column(DateTime(timezone=True), nullable=True)
 
     shipment = relationship("Shipment")
-

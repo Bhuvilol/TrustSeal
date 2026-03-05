@@ -5,10 +5,19 @@ import sys
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from redis import Redis
+import httpx
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, TimeoutError as SATimeoutError
 from .core.config import settings
+from .database import engine
 from .services.realtime import shipment_event_dispatcher
-from .services.telemetry_stream_service import telemetry_stream_service
+from .services.worker_orchestrator import worker_orchestrator
+from .middleware.correlation import CorrelationMiddleware
+try:
+    from web3 import Web3
+except Exception:  # pragma: no cover
+    Web3 = None  # type: ignore
 
 if sys.platform.startswith("win"):
     # psycopg async pool requires selector loop on Windows.
@@ -34,19 +43,21 @@ def ensure_local_sqlite_schema() -> None:
 
 
 @app.on_event("startup")
-def start_telemetry_stream_worker() -> None:
+def start_worker_orchestrator() -> None:
+    """Start all Redis stream workers via orchestrator."""
     try:
-        telemetry_stream_service.startup()
+        worker_orchestrator.startup()
     except Exception:
-        logger.exception("Telemetry stream startup failed. API will continue without Redis stream worker.")
+        logger.exception("Worker orchestrator startup failed. API will continue without Redis stream workers.")
 
 
 @app.on_event("shutdown")
-def stop_telemetry_stream_worker() -> None:
+def stop_worker_orchestrator() -> None:
+    """Gracefully shutdown all workers."""
     try:
-        telemetry_stream_service.shutdown()
+        worker_orchestrator.shutdown(timeout=30.0)
     except Exception:
-        logger.exception("Telemetry stream shutdown failed.")
+        logger.exception("Worker orchestrator shutdown failed.")
 
 
 @app.on_event("startup")
@@ -90,8 +101,12 @@ app.add_middleware(
     allow_origin_regex=combined_cors_regex,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Correlation-ID"],
+    expose_headers=["X-Correlation-ID"],
 )
+
+# Correlation ID middleware (for distributed tracing)
+app.add_middleware(CorrelationMiddleware)
 
 # Root endpoint
 @app.get("/")
@@ -102,9 +117,97 @@ async def root():
 @app.get("/health")
 async def health_check():
     rag = await chat_service.health_status()
-    if rag.get("status") == "ok":
-        return {"status": "ok", "rag": "ready"}
-    return {"status": rag.get("status", "degraded"), "rag": rag.get("rag", "unknown")}
+
+    postgres = {"enabled": True, "status": "down"}
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        postgres["status"] = "ok"
+    except Exception as exc:
+        postgres["error"] = str(exc)
+
+    redis_health = {"enabled": settings.TELEMETRY_PIPELINE_MODE in {"redis", "dual"}}
+    if redis_health["enabled"]:
+        try:
+            r = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+            r.ping()
+            r.close()
+            redis_health["status"] = "ok"
+        except Exception as exc:
+            redis_health["status"] = "down"
+            redis_health["error"] = str(exc)
+    else:
+        redis_health["status"] = "disabled"
+
+    # Worker orchestrator status
+    worker_status = worker_orchestrator.get_status()
+    workers_health = {
+        "enabled": redis_health["enabled"],
+        "status": "ok" if worker_orchestrator.is_healthy() else "degraded",
+        "workers": worker_status.get("workers", {}),
+    }
+
+    ipfs_health = {"enabled": settings.IPFS_PIN_ENABLED}
+    if ipfs_health["enabled"]:
+        if not settings.IPFS_PIN_JWT:
+            ipfs_health["status"] = "down"
+            ipfs_health["error"] = "IPFS_PIN_JWT missing"
+        else:
+            try:
+                with httpx.Client(timeout=5.0) as client:
+                    response = client.get(settings.IPFS_PIN_ENDPOINT)
+                ipfs_health["status"] = "ok" if response.status_code < 500 else "down"
+                ipfs_health["http_status"] = response.status_code
+            except Exception as exc:
+                ipfs_health["status"] = "down"
+                ipfs_health["error"] = str(exc)
+    else:
+        ipfs_health["status"] = "disabled"
+
+    chain_health = {"enabled": settings.CHAIN_ANCHOR_ENABLED}
+    if chain_health["enabled"]:
+        if Web3 is None:
+            chain_health["status"] = "down"
+            chain_health["error"] = "web3 unavailable"
+        elif not settings.CHAIN_RPC_URL:
+            chain_health["status"] = "down"
+            chain_health["error"] = "CHAIN_RPC_URL missing"
+        else:
+            try:
+                w3 = Web3(Web3.HTTPProvider(settings.CHAIN_RPC_URL))
+                connected = bool(w3.is_connected())
+                chain_health["status"] = "ok" if connected else "down"
+                if connected:
+                    chain_health["latest_block"] = int(w3.eth.block_number)
+                else:
+                    chain_health["error"] = "RPC not reachable"
+            except Exception as exc:
+                chain_health["status"] = "down"
+                chain_health["error"] = str(exc)
+    else:
+        chain_health["status"] = "disabled"
+
+    checks = [
+        postgres["status"],
+        redis_health["status"],
+        workers_health["status"],
+        ipfs_health["status"],
+        chain_health["status"],
+    ]
+    if rag.get("status") != "ok":
+        checks.append("down")
+    overall = "ok" if all(s in {"ok", "disabled"} for s in checks) else "degraded"
+    return {
+        "status": overall,
+        "rag": rag.get("status", "degraded"),
+        "services": {
+            "postgres": postgres,
+            "redis": redis_health,
+            "workers": workers_health,
+            "ipfs": ipfs_health,
+            "polygon": chain_health,
+        },
+    }
 
 
 @app.exception_handler(OperationalError)
@@ -131,7 +234,7 @@ async def handle_unexpected_error(_request: Request, exc: Exception) -> JSONResp
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # Import and include routers
-from .routers import auth, devices, shipments, sensor_logs, custody, legs, ws, chat
+from .routers import auth, devices, shipments, sensor_logs, custody, legs, ws, chat, ingest, proofs, ops
 
 app.include_router(auth.router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
 app.include_router(devices.router, prefix=settings.API_V1_STR + "/devices", tags=["devices"])
@@ -141,6 +244,9 @@ app.include_router(custody.router, prefix=settings.API_V1_STR + "/custody", tags
 app.include_router(legs.router, prefix=settings.API_V1_STR + "/legs", tags=["legs"])
 app.include_router(ws.router, prefix=settings.API_V1_STR + "/ws", tags=["ws"])
 app.include_router(chat.router, prefix=settings.API_V1_STR, tags=["chat"])
+app.include_router(ingest.router, prefix=settings.API_V1_STR, tags=["ingest"])
+app.include_router(proofs.router, prefix=settings.API_V1_STR + "/proofs", tags=["proofs"])
+app.include_router(ops.router, prefix=settings.API_V1_STR + "/ops", tags=["ops"])
 from .routers import debug
 app.include_router(debug.router, prefix=settings.API_V1_STR + "/debug", tags=["debug"])
 

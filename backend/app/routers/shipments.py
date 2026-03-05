@@ -8,6 +8,11 @@ from ..models.user import User
 from ..models.device import Device
 from ..models.shipment import Shipment, ShipmentLeg
 from ..models.sensor_log import SensorLog
+from ..models.telemetry_event import TelemetryEvent
+from ..models.custody_transfer import CustodyTransfer
+from ..models.telemetry_batch import TelemetryBatch
+from ..models.ipfs_object import IpfsObject
+from ..models.chain_anchor import ChainAnchor
 from ..models.enums import ShipmentStatus, LegStatus, UserRole
 from ..schemas.shipment import Shipment as ShipmentSchema, ShipmentCreate, ShipmentUpdate, ShipmentWithDetails
 from ..schemas.sensor_log import SensorLog as SensorLogSchema, SensorLogCreate, SensorStats as SensorStatsSchema
@@ -28,6 +33,23 @@ def _parse_uuid(value: str, field_name: str) -> uuid.UUID:
     try:
         return uuid.UUID(str(value))
     except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=f"Invalid {field_name}")
+
+
+def _parse_dt(raw: str | None, field_name: str) -> datetime | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid {field_name}")
 
 @router.get("", response_model=List[ShipmentSchema], include_in_schema=False)
@@ -211,28 +233,173 @@ def get_sensor_logs(
     return [_to_plain(l) for l in logs]
 
 
-@router.get("/{shipment_id}/telemetry", response_model=List[SensorLogSchema])
+@router.get("/{shipment_id}/telemetry")
 def get_shipment_telemetry(
     shipment_id: uuid.UUID,
-    skip: int = Query(0, ge=0),
+    from_ts: str | None = Query(default=None, alias="from"),
+    to_ts: str | None = Query(default=None, alias="to"),
     limit: int = Query(1000, ge=1, le=5000),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Alias endpoint for live telemetry history (backed by sensor_logs)."""
+    """Canonical telemetry timeline from telemetry_events; falls back to sensor_logs."""
     shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
     if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found")
 
-    logs = (
-        db.query(SensorLog)
-        .filter(SensorLog.shipment_id == shipment_id)
-        .order_by(SensorLog.recorded_at.asc())
-        .offset(skip)
-        .limit(limit)
-        .all()
+    from_dt = _parse_dt(from_ts, "from")
+    to_dt = _parse_dt(to_ts, "to")
+
+    q = db.query(TelemetryEvent).filter(TelemetryEvent.shipment_id == shipment_id)
+    if from_dt is not None:
+        q = q.filter(TelemetryEvent.ts >= from_dt)
+    if to_dt is not None:
+        q = q.filter(TelemetryEvent.ts <= to_dt)
+
+    events = q.order_by(TelemetryEvent.ts.asc()).limit(limit).all()
+    if events:
+        out = []
+        for e in events:
+            metrics = e.metrics if isinstance(e.metrics, dict) else {}
+            out.append(
+                {
+                    "event_id": e.event_id,
+                    "ts": e.ts.isoformat() if e.ts else None,
+                    "seq_no": e.seq_no,
+                    "temperature_c": metrics.get("temperature_c"),
+                    "humidity_pct": metrics.get("humidity_pct"),
+                    "shock_g": metrics.get("shock_g"),
+                    "light_lux": metrics.get("light_lux"),
+                    "tilt_deg": metrics.get("tilt_deg"),
+                    "battery_pct": metrics.get("battery_pct"),
+                    "gps": e.gps if isinstance(e.gps, dict) else None,
+                    "ingest_status": e.ingest_status,
+                    "verification_status": e.verification_status,
+                    "bundle_id": str(e.bundle_id) if e.bundle_id else None,
+                    "payload_hash": e.payload_hash,
+                }
+            )
+        return out
+
+    legacy_q = db.query(SensorLog).filter(SensorLog.shipment_id == shipment_id)
+    if from_dt is not None:
+        legacy_q = legacy_q.filter(SensorLog.recorded_at >= from_dt)
+    if to_dt is not None:
+        legacy_q = legacy_q.filter(SensorLog.recorded_at <= to_dt)
+    legacy_logs = legacy_q.order_by(SensorLog.recorded_at.asc()).limit(limit).all()
+    return [
+        {
+            "event_id": str(l.id),
+            "ts": l.recorded_at.isoformat() if l.recorded_at else None,
+            "seq_no": None,
+            "temperature_c": l.temperature,
+            "humidity_pct": l.humidity,
+            "shock_g": l.shock,
+            "light_lux": None,
+            "tilt_deg": l.tilt_angle,
+            "battery_pct": None,
+            "gps": {
+                "lat": l.latitude,
+                "lng": l.longitude,
+                "speed_kmh": l.speed,
+                "heading_deg": l.heading,
+            },
+            "ingest_status": "legacy",
+            "verification_status": "legacy",
+            "bundle_id": None,
+            "payload_hash": l.hash_value,
+        }
+        for l in legacy_logs
+    ]
+
+
+@router.get("/{shipment_id}/custody")
+def get_shipment_custody_timeline(
+    shipment_id: uuid.UUID,
+    from_ts: str | None = Query(default=None, alias="from"),
+    to_ts: str | None = Query(default=None, alias="to"),
+    limit: int = Query(500, ge=1, le=5000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not shipment:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    from_dt = _parse_dt(from_ts, "from")
+    to_dt = _parse_dt(to_ts, "to")
+
+    q = db.query(CustodyTransfer).filter(CustodyTransfer.shipment_id == shipment_id)
+    if from_dt is not None:
+        q = q.filter(CustodyTransfer.ts >= from_dt)
+    if to_dt is not None:
+        q = q.filter(CustodyTransfer.ts <= to_dt)
+    transfers = q.order_by(CustodyTransfer.ts.asc()).limit(limit).all()
+
+    return [
+        {
+            "custody_event_id": t.custody_event_id,
+            "shipment_id": str(t.shipment_id),
+            "leg_id": str(t.leg_id) if t.leg_id else None,
+            "verifier_user_id": str(t.verifier_user_id),
+            "verifier_device_id": str(t.verifier_device_id),
+            "ts": t.ts.isoformat() if t.ts else None,
+            "fingerprint_result": t.fingerprint_result,
+            "fingerprint_score": t.fingerprint_score,
+            "digital_signer_address": t.digital_signer_address,
+            "verification_status": t.verification_status,
+            "ingest_status": t.ingest_status,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in transfers
+    ]
+
+
+@router.get("/{shipment_id}/overview")
+def get_shipment_overview(
+    shipment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not shipment:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    latest_batch = (
+        db.query(TelemetryBatch)
+        .filter(TelemetryBatch.shipment_id == shipment_id)
+        .order_by(TelemetryBatch.created_at.desc())
+        .first()
     )
-    return [_to_plain(l) for l in logs]
+    ipfs_obj = (
+        db.query(IpfsObject).filter(IpfsObject.bundle_id == latest_batch.id).first()
+        if latest_batch
+        else None
+    )
+    anchor = (
+        db.query(ChainAnchor).filter(ChainAnchor.bundle_id == latest_batch.id).first()
+        if latest_batch
+        else None
+    )
+
+    return {
+        "shipment": _to_plain(shipment),
+        "latest_bundle": (
+            {
+                "bundle_id": str(latest_batch.id),
+                "status": latest_batch.status,
+                "record_count": latest_batch.record_count,
+                "batch_hash": latest_batch.batch_hash,
+                "ipfs_cid": latest_batch.ipfs_cid or (ipfs_obj.ipfs_cid if ipfs_obj else None),
+                "tx_hash": latest_batch.tx_hash or (anchor.tx_hash if anchor else None),
+                "anchor_status": anchor.anchor_status if anchor else None,
+                "anchored_at": latest_batch.anchored_at.isoformat() if latest_batch.anchored_at else None,
+                "created_at": latest_batch.created_at.isoformat() if latest_batch.created_at else None,
+            }
+            if latest_batch
+            else None
+        ),
+    }
 
 
 @router.get("/{shipment_id}/sensor-stats", response_model=SensorStatsSchema)

@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT_DIR / ".env")
+DEFAULT_CHAIN_ABI_PATH = ROOT_DIR.parent / "contract" / "artifacts" / "contracts" / "SupplyChainRelay.sol" / "SupplyChainRelay.json"
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "TrustSeal IoT"
@@ -39,11 +40,35 @@ class Settings(BaseSettings):
     TELEMETRY_PIPELINE_MODE: str = os.getenv("TELEMETRY_PIPELINE_MODE", "dual").lower()
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
     REDIS_TELEMETRY_STREAM: str = os.getenv("REDIS_TELEMETRY_STREAM", "telemetry_stream")
+    REDIS_CUSTODY_STREAM: str = os.getenv("REDIS_CUSTODY_STREAM", "custody_stream")
+    REDIS_BUNDLE_READY_STREAM: str = os.getenv("REDIS_BUNDLE_READY_STREAM", "bundle_ready_stream")
+    REDIS_ANCHOR_REQUEST_STREAM: str = os.getenv("REDIS_ANCHOR_REQUEST_STREAM", "anchor_request_stream")
     REDIS_TELEMETRY_CONSUMER_GROUP: str = os.getenv("REDIS_TELEMETRY_CONSUMER_GROUP", "batch_workers")
     REDIS_TELEMETRY_CONSUMER_NAME: str = os.getenv("REDIS_TELEMETRY_CONSUMER_NAME", "worker-1")
     REDIS_TELEMETRY_READ_COUNT: int = int(os.getenv("REDIS_TELEMETRY_READ_COUNT", "200"))
     REDIS_TELEMETRY_BLOCK_MS: int = int(os.getenv("REDIS_TELEMETRY_BLOCK_MS", "1000"))
+    REDIS_RETRY_MAX_ATTEMPTS: int = int(os.getenv("REDIS_RETRY_MAX_ATTEMPTS", "5"))
+    REDIS_RETRY_BASE_DELAY_MS: int = int(os.getenv("REDIS_RETRY_BASE_DELAY_MS", "500"))
+    REDIS_RETRY_MAX_DELAY_MS: int = int(os.getenv("REDIS_RETRY_MAX_DELAY_MS", "30000"))
+    REDIS_DEAD_LETTER_STREAM: str = os.getenv("REDIS_DEAD_LETTER_STREAM", "telemetry_dead_letter_stream")
     TELEMETRY_FINALIZATION_ENABLED: bool = os.getenv("TELEMETRY_FINALIZATION_ENABLED", "false").lower() == "true"
+    BATCH_MIN_RECORDS: int = int(os.getenv("BATCH_MIN_RECORDS", "50"))
+    BATCH_MAX_WINDOW_SECONDS: int = int(os.getenv("BATCH_MAX_WINDOW_SECONDS", "300"))
+    BATCH_FORCE_ON_CUSTODY: bool = os.getenv("BATCH_FORCE_ON_CUSTODY", "true").lower() == "true"
+    CUSTODY_GATE_MAX_AGE_SECONDS: int = int(os.getenv("CUSTODY_GATE_MAX_AGE_SECONDS", "1800"))
+    INGEST_VERIFY_SIGNATURES: bool = os.getenv("INGEST_VERIFY_SIGNATURES", "false").lower() == "true"
+    INGEST_DEVICE_AUTH_ENABLED: bool = os.getenv("INGEST_DEVICE_AUTH_ENABLED", "false").lower() == "true"
+    INGEST_VERIFIER_AUTH_ENABLED: bool = os.getenv("INGEST_VERIFIER_AUTH_ENABLED", "false").lower() == "true"
+    INGEST_DEVICE_TOKENS_JSON: Optional[str] = os.getenv("INGEST_DEVICE_TOKENS_JSON")
+    INGEST_VERIFIER_TOKENS_JSON: Optional[str] = os.getenv("INGEST_VERIFIER_TOKENS_JSON")
+    INGEST_DEVICE_PUBLIC_KEYS_JSON: Optional[str] = os.getenv("INGEST_DEVICE_PUBLIC_KEYS_JSON")
+    INGEST_VERIFIER_PUBLIC_KEYS_JSON: Optional[str] = os.getenv("INGEST_VERIFIER_PUBLIC_KEYS_JSON")
+    INGEST_REPLAY_MAX_CLOCK_SKEW_SECONDS: int = int(os.getenv("INGEST_REPLAY_MAX_CLOCK_SKEW_SECONDS", "300"))
+    INGEST_REPLAY_MAX_EVENT_AGE_SECONDS: int = int(os.getenv("INGEST_REPLAY_MAX_EVENT_AGE_SECONDS", "86400"))
+    ARCHIVE_HOT_RETENTION_DAYS: int = int(os.getenv("ARCHIVE_HOT_RETENTION_DAYS", "30"))
+    ARCHIVE_COLD_RETENTION_DAYS: int = int(os.getenv("ARCHIVE_COLD_RETENTION_DAYS", "365"))
+    ARCHIVE_PURGE_RETENTION_DAYS: int = int(os.getenv("ARCHIVE_PURGE_RETENTION_DAYS", "1095"))
+    ARCHIVE_ENABLE_PURGE: bool = os.getenv("ARCHIVE_ENABLE_PURGE", "false").lower() == "true"
     IPFS_PIN_ENABLED: bool = os.getenv("IPFS_PIN_ENABLED", "false").lower() == "true"
     IPFS_PIN_ENDPOINT: str = os.getenv("IPFS_PIN_ENDPOINT", "https://api.pinata.cloud/pinning/pinJSONToIPFS")
     IPFS_PIN_JWT: Optional[str] = os.getenv("IPFS_PIN_JWT")
@@ -53,7 +78,17 @@ class Settings(BaseSettings):
     CHAIN_PRIVATE_KEY: Optional[str] = os.getenv("CHAIN_PRIVATE_KEY")
     CHAIN_CONTRACT_ADDRESS: Optional[str] = os.getenv("CHAIN_CONTRACT_ADDRESS")
     CHAIN_CONTRACT_ABI_JSON: Optional[str] = os.getenv("CHAIN_CONTRACT_ABI_JSON")
+    CHAIN_CONTRACT_ABI_PATH: str = os.getenv("CHAIN_CONTRACT_ABI_PATH", str(DEFAULT_CHAIN_ABI_PATH))
     CHAIN_PREVIOUS_CUSTODIAN: str = os.getenv("CHAIN_PREVIOUS_CUSTODIAN", "0x0000000000000000000000000000000000000000")
+    CHAIN_ANCHOR_MAX_ATTEMPTS: int = int(os.getenv("CHAIN_ANCHOR_MAX_ATTEMPTS", "3"))
+    CHAIN_ANCHOR_RETRY_BASE_DELAY_MS: int = int(os.getenv("CHAIN_ANCHOR_RETRY_BASE_DELAY_MS", "1000"))
+    CHAIN_ANCHOR_RETRY_MAX_DELAY_MS: int = int(os.getenv("CHAIN_ANCHOR_RETRY_MAX_DELAY_MS", "10000"))
+    CHAIN_REPLACEMENT_GAS_BUMP_PERCENT: int = int(os.getenv("CHAIN_REPLACEMENT_GAS_BUMP_PERCENT", "15"))
+    CHAIN_RECEIPT_TIMEOUT_SECONDS: int = int(os.getenv("CHAIN_RECEIPT_TIMEOUT_SECONDS", "120"))
+    CHAIN_INDEXER_ENABLED: bool = os.getenv("CHAIN_INDEXER_ENABLED", "false").lower() == "true"
+    CHAIN_INDEXER_START_BLOCK: int = int(os.getenv("CHAIN_INDEXER_START_BLOCK", "0"))
+    CHAIN_INDEXER_BLOCK_BATCH_SIZE: int = int(os.getenv("CHAIN_INDEXER_BLOCK_BATCH_SIZE", "500"))
+    CHAIN_INDEXER_CONFIRMATIONS: int = int(os.getenv("CHAIN_INDEXER_CONFIRMATIONS", "2"))
 
     OPENROUTER_API_KEY: Optional[str] = os.getenv("OPENROUTER_API_KEY")
     OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
