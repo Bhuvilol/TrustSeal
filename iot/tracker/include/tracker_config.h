@@ -17,7 +17,7 @@
 #define LDR_LUX_SCALE 1000.0f
 
 // Shipment/device placeholders for local firmware testing
-#define TRACKER_SHIPMENT_ID "ROvhMsIvHIicFREIcS7XSb/FystevE0iJKk/wV0wvzw="
+#define TRACKER_SHIPMENT_ID "d8cb6561-7186-43b1-b4b3-f0925875c450"
 #define TRACKER_DEVICE_ID "0cb901e3-6cf7-4be2-83f4-3a232a283e33"
 #define TRACKER_DEVICE_UID "ESP32-TRACKER-001"
 #define TRACKER_FIRMWARE_VERSION "0.1.0"
@@ -28,11 +28,11 @@
 
 // A7670C modem serial wiring (ESP32 UART1)
 #define MODEM_BAUD 115200
-#define MODEM_TX_PIN 27
-#define MODEM_RX_PIN 26
+#define MODEM_TX_PIN 17
+#define MODEM_RX_PIN 16
 
 // Airtel APN (India)
-#define MODEM_APN "airtelgprs.com"
+#define MODEM_APN "jionet"
 #define MODEM_APN_USER ""
 #define MODEM_APN_PASS ""
 

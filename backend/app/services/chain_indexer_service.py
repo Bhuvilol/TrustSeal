@@ -70,10 +70,7 @@ class ChainIndexerService:
         cursor = resolved_from
         while cursor <= resolved_to:
             chunk_to = min(resolved_to, cursor + batch_size - 1)
-            logs = contract.events.CustodyTransferred().get_logs(
-                fromBlock=cursor,
-                toBlock=chunk_to,
-            )
+            logs = self._get_custody_logs(contract, from_block=cursor, to_block=chunk_to)
             events_total += len(logs)
             for event in logs:
                 mapped = self._ingest_event(
@@ -96,6 +93,20 @@ class ChainIndexerService:
             unmatched_events=unmatched_total,
             latest_chain_block=latest_chain_block,
         ))
+
+    @staticmethod
+    def _get_custody_logs(contract: Any, *, from_block: int, to_block: int) -> list[Any]:
+        accessor = contract.events.CustodyTransferred()
+        try:
+            return accessor.get_logs(
+                from_block=from_block,
+                to_block=to_block,
+            )
+        except TypeError:
+            return accessor.get_logs(
+                fromBlock=from_block,
+                toBlock=to_block,
+            )
 
     def _load_web3_contract(self) -> tuple[Any, Any]:
         if Web3 is None:

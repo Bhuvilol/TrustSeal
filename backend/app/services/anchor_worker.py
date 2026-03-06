@@ -28,7 +28,7 @@ class AnchorWorker:
         batch = db.query(TelemetryBatch).filter(TelemetryBatch.id == bundle_uuid).first()
         if batch is None:
             return None
-        if batch.status not in {"custody_verified", "anchor_pending", "anchored"}:
+        if batch.status not in {"custody_verified", "anchor_pending", "anchored", "failed"}:
             return None
         if batch.status == "anchored":
             return db.query(ChainAnchor).filter(ChainAnchor.bundle_id == batch.id).first()

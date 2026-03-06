@@ -161,7 +161,6 @@ bool sign_hash_hex(const String &hash_hex, String &signature_b64) {
     hash_bytes,
     sizeof(hash_bytes),
     signature,
-    sizeof(signature),
     &signature_len,
     mbedtls_ctr_drbg_random,
     &signer_ctr_drbg
@@ -314,11 +313,19 @@ String build_and_sign_custody_packet(
   canonical["verifier_user_id"] = VERIFIER_USER_ID;
   canonical["ts"] = ts;
   canonical["fingerprint_result"] = fingerprint_result;
-  canonical["fingerprint_score"] = confidence >= 0 ? confidence : nullptr;
-  canonical["fingerprint_template_id"] = template_id >= 0 ? String(template_id) : nullptr;
   canonical["digital_signer_address"] = VERIFIER_SIGNER_ADDRESS;
   canonical["sig_alg"] = "ecdsa-secp256r1";
   canonical["idempotency_key"] = event_id;
+  if (confidence >= 0) {
+    canonical["fingerprint_score"] = confidence;
+  } else {
+    canonical["fingerprint_score"] = nullptr;
+  }
+  if (template_id >= 0) {
+    canonical["fingerprint_template_id"] = String(template_id);
+  } else {
+    canonical["fingerprint_template_id"] = nullptr;
+  }
 
   String canonical_json;
   serializeJson(canonical, canonical_json);
@@ -335,13 +342,21 @@ String build_and_sign_custody_packet(
   packet["verifier_user_id"] = VERIFIER_USER_ID;
   packet["ts"] = ts;
   packet["fingerprint_result"] = fingerprint_result;
-  packet["fingerprint_score"] = confidence >= 0 ? confidence : nullptr;
-  packet["fingerprint_template_id"] = template_id >= 0 ? String(template_id) : nullptr;
   packet["digital_signer_address"] = VERIFIER_SIGNER_ADDRESS;
   packet["approval_message_hash"] = approval_hash;
   packet["signature"] = signature_ok ? signature_b64 : "";
   packet["sig_alg"] = "ecdsa-secp256r1";
   packet["idempotency_key"] = event_id;
+  if (confidence >= 0) {
+    packet["fingerprint_score"] = confidence;
+  } else {
+    packet["fingerprint_score"] = nullptr;
+  }
+  if (template_id >= 0) {
+    packet["fingerprint_template_id"] = String(template_id);
+  } else {
+    packet["fingerprint_template_id"] = nullptr;
+  }
 
   String packet_json;
   serializeJson(packet, packet_json);

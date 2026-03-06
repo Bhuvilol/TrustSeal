@@ -12,9 +12,9 @@
 
 // Canonical IDs (replace with real values per device/shipment context)
 #define VERIFIER_DEVICE_ID "4fedec9d-eca7-428f-9803-d6728d874c54"
-#define VERIFIER_USER_ID "verifier_001"
-#define VERIFIER_SHIPMENT_ID "ROvhMsIvHIicFREIcS7XSb/FystevE0iJKk/wV0wvzw="
-#define VERIFIER_LEG_ID "gK4j0+KmxDPNOke3O63yhsDnHb0Vr2BSFBaGDfBqkTU="
+#define VERIFIER_USER_ID "a7110eff-cc43-4a64-a962-9d63ec8d46ee"
+#define VERIFIER_SHIPMENT_ID "d8cb6561-7186-43b1-b4b3-f0925875c450"
+#define VERIFIER_LEG_ID "b29e85bb-2bcc-4107-b614-d239932a0265"
 
 // On-chain signer identity to include in custody packet
 #define VERIFIER_SIGNER_ADDRESS "0x0000000000000000000000000000000000000000"
