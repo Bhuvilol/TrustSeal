@@ -21,8 +21,6 @@ class Shipment(Base):
     # Relationships
     device = relationship("Device", back_populates="shipments")
     legs = relationship("ShipmentLeg", back_populates="shipment", cascade="all, delete-orphan")
-    sensor_logs = relationship("SensorLog", back_populates="shipment", cascade="all, delete-orphan")
-    custody_checkpoints = relationship("CustodyCheckpoint", back_populates="shipment", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Shipment {self.shipment_code}>"
@@ -41,7 +39,6 @@ class ShipmentLeg(Base):
     
     # Relationships
     shipment = relationship("Shipment", back_populates="legs")
-    custody_checkpoints = relationship("CustodyCheckpoint", back_populates="leg", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<ShipmentLeg {self.leg_number} for Shipment {self.shipment_id}>"

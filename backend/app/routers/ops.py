@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections import Counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from redis import Redis
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..core.config import settings
 from ..database import get_db
 from ..dependencies import require_roles
 from ..models.chain_anchor import ChainAnchor
+from ..models.custody_transfer import CustodyTransfer
 from ..models.enums import UserRole
 from ..models.ipfs_object import IpfsObject
+from ..models.telemetry_event import TelemetryEvent
 from ..models.telemetry_batch import TelemetryBatch
 from ..services.archival_service import archival_service
 from ..services.anchor_worker import anchor_worker
@@ -26,29 +28,112 @@ from ..services.worker_orchestrator import worker_orchestrator
 router = APIRouter()
 
 
+def _shipment_pipeline_snapshot(db: Session, shipment_id: uuid.UUID) -> dict:
+    latest_event = (
+        db.query(TelemetryEvent)
+        .filter(TelemetryEvent.shipment_id == shipment_id)
+        .order_by(TelemetryEvent.ts.desc(), TelemetryEvent.created_at.desc())
+        .first()
+    )
+    latest_custody = (
+        db.query(CustodyTransfer)
+        .filter(CustodyTransfer.shipment_id == shipment_id)
+        .order_by(CustodyTransfer.ts.desc(), CustodyTransfer.created_at.desc())
+        .first()
+    )
+    latest_batch = (
+        db.query(TelemetryBatch)
+        .filter(TelemetryBatch.shipment_id == shipment_id)
+        .order_by(TelemetryBatch.created_at.desc())
+        .first()
+    )
+
+    latest_anchor = None
+    latest_ipfs = None
+    if latest_batch is not None:
+        latest_anchor = db.query(ChainAnchor).filter(ChainAnchor.bundle_id == latest_batch.id).first()
+        latest_ipfs = db.query(IpfsObject).filter(IpfsObject.bundle_id == latest_batch.id).first()
+
+    custody_state = "missing"
+    if latest_custody is not None:
+        if latest_custody.verification_status != "valid":
+            custody_state = str(latest_custody.verification_status)
+        elif str(latest_custody.fingerprint_result or "").strip().lower() != "match":
+            custody_state = "rejected"
+        elif latest_custody.ingest_status == "persisted":
+            custody_state = "verified"
+        else:
+            custody_state = str(latest_custody.ingest_status or "received")
+
+    anchor_state = "missing"
+    if latest_anchor is not None:
+        anchor_state = str(latest_anchor.anchor_status)
+        if anchor_state == "confirmed":
+            anchor_state = "confirmed"
+    elif latest_batch is not None and latest_batch.status == "anchored":
+        anchor_state = "confirmed"
+    elif latest_batch is not None and latest_batch.status == "anchor_pending":
+        anchor_state = "pending"
+
+    updated_at = None
+    if latest_anchor and latest_anchor.anchored_at:
+        updated_at = latest_anchor.anchored_at.isoformat()
+    elif latest_batch and latest_batch.created_at:
+        updated_at = latest_batch.created_at.isoformat()
+    elif latest_event and latest_event.created_at:
+        updated_at = latest_event.created_at.isoformat()
+
+    return {
+        "shipment_id": str(shipment_id),
+        "ingest": str(latest_event.ingest_status if latest_event else "missing"),
+        "batch": str(latest_batch.status if latest_batch else "missing"),
+        "custody": custody_state,
+        "anchor": anchor_state,
+        "latest_bundle_id": str(latest_batch.id) if latest_batch else None,
+        "latest_ipfs_cid": (
+            latest_batch.ipfs_cid
+            if latest_batch and latest_batch.ipfs_cid
+            else (latest_ipfs.ipfs_cid if latest_ipfs else None)
+        ),
+        "latest_tx_hash": (
+            latest_batch.tx_hash
+            if latest_batch and latest_batch.tx_hash
+            else (latest_anchor.tx_hash if latest_anchor else None)
+        ),
+        "updated_at": updated_at,
+        "error_message": (
+            latest_batch.error_message
+            if latest_batch and latest_batch.error_message
+            else (latest_anchor.error_message if latest_anchor else None)
+        ),
+    }
+
+
 @router.get("/pipeline-status")
 def pipeline_status(
+    shipment_id: uuid.UUID | None = Query(default=None),
     db: Session = Depends(get_db),
     _admin=Depends(require_roles(UserRole.ADMIN)),
 ):
-    by_status_rows = db.query(TelemetryBatch.status, func.count(TelemetryBatch.id)).group_by(TelemetryBatch.status).all()
-    by_status = {status: int(count) for status, count in by_status_rows}
+    """Get pipeline status (requires admin auth)."""
+    batch_rows = db.query(TelemetryBatch).all()
+    by_status = dict(Counter(str(batch.status) for batch in batch_rows if getattr(batch, "status", None)))
 
-    anchors_pending = (
-        db.query(func.count(ChainAnchor.id))
+    anchors_pending = len(
+        db.query(ChainAnchor)
         .filter(ChainAnchor.anchor_status.in_(["pending", "submitted"]))
-        .scalar()
-    ) or 0
-    anchors_failed = (
-        db.query(func.count(ChainAnchor.id))
+        .all()
+    )
+    anchors_failed = len(
+        db.query(ChainAnchor)
         .filter(ChainAnchor.anchor_status == "failed")
-        .scalar()
-    ) or 0
-    ipfs_pending = (
-        db.query(func.count(IpfsObject.id))
+        .all()
+    )
+    ipfs_pending = len(
+        db.query(IpfsObject)
         .filter(IpfsObject.pin_status.in_(["pending"]))
-        .scalar()
-    ) or 0
+        .all()
+    )
 
     redis_info = {"available": False}
     if settings.TELEMETRY_PIPELINE_MODE in {"redis", "dual"}:
@@ -60,12 +145,13 @@ def pipeline_status(
                 "custody_stream_len": r.xlen(settings.REDIS_CUSTODY_STREAM),
                 "bundle_ready_stream_len": r.xlen(settings.REDIS_BUNDLE_READY_STREAM),
                 "anchor_request_stream_len": r.xlen(settings.REDIS_ANCHOR_REQUEST_STREAM),
+                "dead_letter_stream_len": r.xlen(settings.REDIS_DEAD_LETTER_STREAM),
             }
             r.close()
         except Exception as exc:
             redis_info = {"available": False, "error": str(exc)}
 
-    return {
+    response = {
         "pipeline": {
             "batch_status_counts": by_status,
             "anchors_pending": int(anchors_pending),
@@ -73,7 +159,14 @@ def pipeline_status(
             "ipfs_pending": int(ipfs_pending),
         },
         "redis": redis_info,
+        "workers": {
+            "started": worker_orchestrator.get_status()["started"],
+            "healthy": worker_orchestrator.is_healthy(),
+        },
     }
+    if shipment_id is not None:
+        response["shipment"] = _shipment_pipeline_snapshot(db, shipment_id)
+    return response
 
 
 @router.post("/retry/anchor")
@@ -286,7 +379,7 @@ def archival_plan(
 def get_workers_status(
     _admin=Depends(require_roles(UserRole.ADMIN)),
 ):
-    """Get status of all Redis stream workers."""
+    """Get status of all Redis stream workers (requires admin auth)."""
     status = worker_orchestrator.get_status()
     return {
         "orchestrator": {

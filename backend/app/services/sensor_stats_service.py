@@ -4,11 +4,10 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..models.sensor_log import SensorLog
 from ..models.shipment import Shipment
+from ..models.telemetry_event import TelemetryEvent
 
 
 def _parse_uuid(value: Optional[str], field_name: str) -> Optional[uuid.UUID]:
@@ -75,7 +74,7 @@ def calculate_sensor_statistics(
         device_id=device_id,
     )
 
-    query = db.query(SensorLog)
+    query = db.query(TelemetryEvent)
     if shipment_ids is not None:
         if not shipment_ids:
             return {
@@ -97,36 +96,43 @@ def calculate_sensor_statistics(
                 "has_temperature_breach": False,
                 "shipment_ids": [],
             }
-        query = query.filter(SensorLog.shipment_id.in_(shipment_ids))
+        query = query.filter(TelemetryEvent.shipment_id.in_(shipment_ids))
 
     start_dt = _parse_datetime(start_time, "start_time")
     end_dt = _parse_datetime(end_time, "end_time")
     if start_dt is not None:
-        query = query.filter(SensorLog.recorded_at >= start_dt)
+        query = query.filter(TelemetryEvent.ts >= start_dt)
     if end_dt is not None:
-        query = query.filter(SensorLog.recorded_at <= end_dt)
+        query = query.filter(TelemetryEvent.ts <= end_dt)
 
-    aggregate = query.with_entities(
-        func.count(SensorLog.id),
-        func.count(SensorLog.temperature),
-        func.avg(SensorLog.temperature),
-        func.min(SensorLog.temperature),
-        func.max(SensorLog.temperature),
-        func.max(SensorLog.shock),
-        func.min(SensorLog.recorded_at),
-        func.max(SensorLog.recorded_at),
-    ).one()
+    events = query.order_by(TelemetryEvent.ts.asc(), TelemetryEvent.created_at.asc()).all()
+    temperature_values: list[float] = []
+    shock_values: list[float] = []
+    for event in events:
+        metrics = event.metrics if isinstance(event.metrics, dict) else {}
+        temperature = metrics.get("temperature_c")
+        shock = metrics.get("shock_g")
+        if isinstance(temperature, (int, float)):
+            temperature_values.append(float(temperature))
+        if isinstance(shock, (int, float)):
+            shock_values.append(float(shock))
 
-    has_temperature_breach = (
-        query.filter(SensorLog.temperature.isnot(None), SensorLog.temperature > temperature_threshold)
-        .limit(1)
-        .count()
-        > 0
+    total_logs = len(events)
+    avg_temperature = (
+        sum(temperature_values) / len(temperature_values)
+        if temperature_values
+        else None
     )
+    min_temperature = min(temperature_values) if temperature_values else None
+    max_temperature = max(temperature_values) if temperature_values else None
+    max_shock = max(shock_values) if shock_values else None
+    first_recorded_at = events[0].ts.isoformat() if events and events[0].ts is not None else None
+    last_recorded_at = events[-1].ts.isoformat() if events and events[-1].ts is not None else None
+    has_temperature_breach = any(value > temperature_threshold for value in temperature_values)
 
     shipment_ids_in_scope = [
         str(row[0])
-        for row in query.with_entities(SensorLog.shipment_id).distinct().limit(200).all()
+        for row in query.with_entities(TelemetryEvent.shipment_id).distinct().limit(200).all()
         if row[0] is not None
     ]
 
@@ -138,14 +144,14 @@ def calculate_sensor_statistics(
             "start_time": start_time,
             "end_time": end_time,
         },
-        "total_logs": int(aggregate[0] or 0),
-        "temperature_sample_count": int(aggregate[1] or 0),
-        "average_temperature": float(aggregate[2]) if aggregate[2] is not None else None,
-        "min_temperature": float(aggregate[3]) if aggregate[3] is not None else None,
-        "max_temperature": float(aggregate[4]) if aggregate[4] is not None else None,
-        "max_shock": float(aggregate[5]) if aggregate[5] is not None else None,
-        "first_recorded_at": aggregate[6].isoformat() if aggregate[6] is not None else None,
-        "last_recorded_at": aggregate[7].isoformat() if aggregate[7] is not None else None,
+        "total_logs": total_logs,
+        "temperature_sample_count": len(temperature_values),
+        "average_temperature": avg_temperature,
+        "min_temperature": min_temperature,
+        "max_temperature": max_temperature,
+        "max_shock": max_shock,
+        "first_recorded_at": first_recorded_at,
+        "last_recorded_at": last_recorded_at,
         "has_temperature_breach": has_temperature_breach,
         "shipment_ids": shipment_ids_in_scope,
     }

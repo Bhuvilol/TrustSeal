@@ -1,17 +1,17 @@
 import { apiClient } from '@/api/axios';
 import { API_PREFIX } from '@/utils/constants';
 import type {
-  CustodyCheckpointCreatePayload,
-  CustodyCheckpoint,
-  SensorLog,
+  CustodyTransfer,
   Shipment,
   ShipmentCreatePayload,
   ShipmentLeg,
   ShipmentLegCreatePayload,
+  ShipmentOverview,
   ShipmentSensorStats,
   ShipmentStatus,
   ShipmentUpdatePayload,
   ShipmentWithDetails,
+  TelemetryEvent,
 } from '@/types';
 
 interface ShipmentQueryParams {
@@ -45,41 +45,22 @@ export async function updateShipment(shipmentId: string, payload: ShipmentUpdate
   return data;
 }
 
-export async function getShipmentLogs(shipmentId: string): Promise<SensorLog[]> {
-  const { data } = await apiClient.get<SensorLog[]>(`${API_PREFIX}/shipments/${shipmentId}/logs`);
-  return data;
-}
-
-export async function getShipmentLogsWithParams(
-  shipmentId: string,
-  params?: { skip?: number; limit?: number },
-): Promise<SensorLog[]> {
-  const { data } = await apiClient.get<SensorLog[]>(`${API_PREFIX}/shipments/${shipmentId}/logs`, { params });
-  return data;
-}
-
 interface TelemetryQueryParams {
   skip?: number;
   limit?: number;
+  from?: string;
+  to?: string;
 }
 
 export async function getShipmentTelemetry(
   shipmentId: string,
   params?: TelemetryQueryParams,
-): Promise<SensorLog[]> {
-  try {
-    const { data } = await apiClient.get<SensorLog[]>(
-      `${API_PREFIX}/shipments/${shipmentId}/telemetry`,
-      { params, timeout: 8_000 },
-    );
-    return data;
-  } catch {
-    const { data } = await apiClient.get<SensorLog[]>(`${API_PREFIX}/shipments/${shipmentId}/logs`, {
-      params,
-      timeout: 8_000,
-    });
-    return data;
-  }
+): Promise<TelemetryEvent[]> {
+  const { data } = await apiClient.get<TelemetryEvent[]>(`${API_PREFIX}/shipments/${shipmentId}/telemetry`, {
+    params,
+    timeout: 8_000,
+  });
+  return data;
 }
 
 export async function getShipmentSensorStats(shipmentId: string): Promise<ShipmentSensorStats> {
@@ -88,15 +69,29 @@ export async function getShipmentSensorStats(shipmentId: string): Promise<Shipme
 }
 
 export async function getShipmentLegs(shipmentId: string): Promise<ShipmentLeg[]> {
-  const { data } = await apiClient.get<ShipmentLeg[]>(`${API_PREFIX}/legs/`, {
-    params: { shipment_id: shipmentId },
-  });
+  const { data } = await apiClient.get<ShipmentLeg[]>(`${API_PREFIX}/shipments/${shipmentId}/legs`);
   return data;
 }
 
-export async function getShipmentCustody(shipmentId: string): Promise<CustodyCheckpoint[]> {
-  const { data } = await apiClient.get<CustodyCheckpoint[]>(`${API_PREFIX}/custody/`, {
-    params: { shipment_id: shipmentId },
+export async function getShipmentOverview(shipmentId: string): Promise<ShipmentOverview> {
+  const { data } = await apiClient.get<ShipmentOverview>(`${API_PREFIX}/shipments/${shipmentId}/overview`);
+  return data;
+}
+
+interface CustodyQueryParams {
+  skip?: number;
+  limit?: number;
+  from?: string;
+  to?: string;
+}
+
+export async function getShipmentCustody(
+  shipmentId: string,
+  params?: CustodyQueryParams,
+): Promise<CustodyTransfer[]> {
+  const { data } = await apiClient.get<CustodyTransfer[]>(`${API_PREFIX}/shipments/${shipmentId}/custody`, {
+    params,
+    timeout: 8_000,
   });
   return data;
 }
@@ -113,12 +108,5 @@ export async function startShipmentLeg(legId: string): Promise<{ message: string
 
 export async function completeShipmentLeg(legId: string): Promise<{ message: string }> {
   const { data } = await apiClient.post<{ message: string }>(`${API_PREFIX}/legs/${legId}/complete`);
-  return data;
-}
-
-export async function createCustodyCheckpoint(
-  payload: CustodyCheckpointCreatePayload,
-): Promise<CustodyCheckpoint> {
-  const { data } = await apiClient.post<CustodyCheckpoint>(`${API_PREFIX}/custody/`, payload);
   return data;
 }

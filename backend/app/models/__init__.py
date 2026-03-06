@@ -1,8 +1,6 @@
 from .user import User
 from .device import Device
 from .shipment import Shipment, ShipmentLeg
-from .sensor_log import SensorLog
-from .custody_checkpoint import CustodyCheckpoint
 from .telemetry_batch import TelemetryBatch
 from .telemetry_event import TelemetryEvent
 from .custody_transfer import CustodyTransfer
@@ -16,8 +14,6 @@ __all__ = [
     "Device", 
     "Shipment",
     "ShipmentLeg",
-    "SensorLog",
-    "CustodyCheckpoint",
     "TelemetryBatch",
     "TelemetryEvent",
     "CustodyTransfer",

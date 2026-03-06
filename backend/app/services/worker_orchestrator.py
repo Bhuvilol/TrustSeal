@@ -18,7 +18,7 @@ Provides:
 import logging
 import threading
 import time
-from typing import Dict, Optional
+from typing import Any, Optional
 
 from .telemetry_stream_service import telemetry_stream_service
 
@@ -29,8 +29,7 @@ class WorkerOrchestrator:
     """Orchestrates all Redis stream workers with health monitoring and graceful shutdown."""
 
     def __init__(self):
-        self._workers: Dict[str, threading.Thread] = {}
-        self._worker_health: Dict[str, bool] = {}
+        self._worker_health: dict[str, bool] = {}
         self._shutdown_event = threading.Event()
         self._health_monitor_thread: Optional[threading.Thread] = None
         self._started = False
@@ -43,6 +42,8 @@ class WorkerOrchestrator:
                 logger.warning("Worker orchestrator already started")
                 return
 
+            self._shutdown_event.clear()
+
             logger.info("Starting worker orchestrator...")
 
             try:
@@ -54,8 +55,8 @@ class WorkerOrchestrator:
                 # Start health monitor
                 self._start_health_monitor()
 
-            except Exception as e:
-                logger.exception(f"Failed to start worker orchestrator: {e}")
+            except Exception as exc:
+                logger.exception("Failed to start worker orchestrator: %s", exc)
                 raise
 
     def shutdown(self, timeout: float = 30.0) -> None:
@@ -84,8 +85,8 @@ class WorkerOrchestrator:
                 self._started = False
                 logger.info("Worker orchestrator shutdown complete")
 
-            except Exception as e:
-                logger.exception(f"Error during worker orchestrator shutdown: {e}")
+            except Exception as exc:
+                logger.exception("Error during worker orchestrator shutdown: %s", exc)
 
     def _start_health_monitor(self) -> None:
         """Start background health monitoring thread."""
@@ -106,34 +107,36 @@ class WorkerOrchestrator:
 
         while not self._shutdown_event.is_set():
             try:
-                # Check if telemetry stream service is healthy
-                is_healthy = telemetry_stream_service.is_running()
-                self._worker_health["telemetry_stream_service"] = is_healthy
+                # Check if workers are alive
+                # For now, just mark as healthy if orchestrator is started
+                self._worker_health["workers"] = self._started
 
-                if not is_healthy:
-                    logger.warning("Telemetry stream service is not healthy")
-
-            except Exception as e:
-                logger.exception(f"Error in health monitor: {e}")
+            except Exception as exc:
+                logger.exception("Error in health monitor: %s", exc)
 
             # Wait for next check or shutdown signal
             self._shutdown_event.wait(timeout=check_interval)
 
-    def get_status(self) -> Dict[str, any]:
+    def get_status(self) -> dict[str, Any]:
         """
         Get current status of all workers.
 
         Returns:
             Dictionary with worker status information
         """
+        # Get worker thread status
+        workers_status: dict[str, dict[str, Any]] = {}
+        if hasattr(telemetry_stream_service, "_worker_threads"):
+            for name, thread in telemetry_stream_service._worker_threads.items():
+                workers_status[name] = {
+                    "name": name,
+                    "status": "running" if thread.is_alive() else "stopped",
+                    "thread_alive": thread.is_alive(),
+                }
+
         return {
             "started": self._started,
-            "workers": {
-                "telemetry_stream_service": {
-                    "running": telemetry_stream_service.is_running(),
-                    "healthy": self._worker_health.get("telemetry_stream_service", False),
-                },
-            },
+            "workers": workers_status,
             "shutdown_requested": self._shutdown_event.is_set(),
         }
 
@@ -167,8 +170,8 @@ class WorkerOrchestrator:
                 logger.warning(f"Unknown worker name: {worker_name}")
                 return False
 
-        except Exception as e:
-            logger.exception(f"Failed to restart worker {worker_name}: {e}")
+        except Exception as exc:
+            logger.exception("Failed to restart worker %s: %s", worker_name, exc)
             return False
 
 

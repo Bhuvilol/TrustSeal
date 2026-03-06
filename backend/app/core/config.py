@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT_DIR / ".env")
-DEFAULT_CHAIN_ABI_PATH = ROOT_DIR.parent / "contract" / "artifacts" / "contracts" / "SupplyChainRelay.sol" / "SupplyChainRelay.json"
+DEFAULT_CHAIN_ABI_PATH = ROOT_DIR.parent / "contract" / "deployments" / "amoy.json"
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "TrustSeal IoT"
@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     SQLALCHEMY_POOL_PRE_PING: bool = os.getenv("SQLALCHEMY_POOL_PRE_PING", "true").lower() == "true"
     POSTGRES_CONNECT_TIMEOUT_SECONDS: int = int(os.getenv("POSTGRES_CONNECT_TIMEOUT_SECONDS", "5"))
     WS_REQUIRE_AUTH: bool = os.getenv("WS_REQUIRE_AUTH", "false").lower() == "true"
+    APP_PROCESS_ROLE: str = os.getenv("APP_PROCESS_ROLE", "all").lower()
     REALTIME_QUEUE_MAXSIZE: int = int(os.getenv("REALTIME_QUEUE_MAXSIZE", "5000"))
     TELEMETRY_PIPELINE_MODE: str = os.getenv("TELEMETRY_PIPELINE_MODE", "dual").lower()
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
@@ -135,6 +136,14 @@ class Settings(BaseSettings):
     AGENTIC_SHORT_MEMORY_WINDOW: int = int(os.getenv("AGENTIC_SHORT_MEMORY_WINDOW", "6"))
     AGENTIC_SHORT_MEMORY_TTL_MINUTES: int = int(os.getenv("AGENTIC_SHORT_MEMORY_TTL_MINUTES", "240"))
     AGENTIC_LONG_MEMORY_TOP_K: int = int(os.getenv("AGENTIC_LONG_MEMORY_TOP_K", "4"))
+
+    @property
+    def RUN_API_SERVER(self) -> bool:
+        return self.APP_PROCESS_ROLE in {"all", "api"}
+
+    @property
+    def RUN_WORKERS(self) -> bool:
+        return self.APP_PROCESS_ROLE in {"all", "worker"}
     
     @property
     def DATABASE_URL(self) -> str:

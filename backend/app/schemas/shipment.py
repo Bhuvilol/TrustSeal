@@ -46,11 +46,7 @@ class Shipment(ShipmentBase):
 class ShipmentWithDetails(Shipment):
     device: Optional["Device"] = None
     legs: Optional[List["ShipmentLeg"]] = []
-    sensor_logs: Optional[List["SensorLog"]] = []
-    custody_checkpoints: Optional[List["CustodyCheckpoint"]] = []
 
 # Import to avoid circular imports
 from .device import Device
 from .leg import ShipmentLeg
-from .sensor_log import SensorLog
-from .custody import CustodyCheckpoint

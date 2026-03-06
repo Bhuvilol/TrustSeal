@@ -7,7 +7,7 @@ import clsx from 'clsx';
 import { motion } from 'framer-motion';
 import { Route, Wifi, Zap } from 'lucide-react';
 import type { EChartsOption } from 'echarts';
-import type { SensorLog, ShipmentLeg, ShipmentStatus } from '@/types';
+import type { ShipmentLeg, ShipmentStatus, TelemetryEvent } from '@/types';
 import { formatDateTime, formatNumber } from '@/utils/format';
 import { getStoredToken } from '@/utils/token';
 
@@ -22,7 +22,7 @@ const RANGE_MS = { '10m': 10 * 60 * 1000, '1h': 60 * 60 * 1000 } as const;
 
 interface LiveTelemetryModuleProps {
   shipmentId: string;
-  initialTelemetry: SensorLog[];
+  initialTelemetry: TelemetryEvent[];
   maxPoints?: number;
   legs?: ShipmentLeg[];
   origin?: string;
@@ -93,7 +93,7 @@ function LiveTelemetryModule({
   destination,
   status,
 }: LiveTelemetryModuleProps) {
-  const [telemetry, setTelemetry] = useState<SensorLog[]>([...initialTelemetry].slice(-maxPoints));
+  const [telemetry, setTelemetry] = useState<TelemetryEvent[]>([...initialTelemetry].slice(-maxPoints));
   const [rangeMode, setRangeMode] = useState<RangeMode>('full');
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>('connecting');
   const [autoCenter, setAutoCenter] = useState(true);
@@ -146,20 +146,32 @@ function LiveTelemetryModule({
             const latitude = finiteNumber(log.latitude) ? log.latitude : null;
             const longitude = finiteNumber(log.longitude) ? log.longitude : null;
             const recordedAt = String(log.recorded_at || new Date().toISOString());
-            const entry: SensorLog = {
-              id: String(log.id || `ws-${shipmentId}-${recordedAt}-${Math.random().toString(16).slice(2, 8)}`),
+            const entry: TelemetryEvent = {
+              event_id: String(log.id || `ws-${shipmentId}-${recordedAt}-${Math.random().toString(16).slice(2, 8)}`),
               shipment_id: String(log.shipment_id || shipmentId),
-              temperature: finiteNumber(log.temperature) ? log.temperature : null,
-              humidity: finiteNumber(log.humidity) ? log.humidity : null,
-              shock: finiteNumber(log.shock) ? log.shock : null,
-              light_exposure: typeof log.light_exposure === 'boolean' ? log.light_exposure : null,
-              tilt_angle: finiteNumber(log.tilt_angle) ? log.tilt_angle : null,
-              latitude,
-              longitude,
-              speed: finiteNumber(log.speed) ? log.speed : null,
-              heading: finiteNumber(log.heading) ? log.heading : null,
-              hash_value: String(log.hash_value || `ws-${Math.random().toString(16).slice(2, 10)}`),
-              recorded_at: recordedAt,
+              device_id: String(log.device_id || 'ws-device'),
+              ts: recordedAt,
+              seq_no: Number.isFinite(Number(log.seq_no)) ? Number(log.seq_no) : 0,
+              temperature_c: finiteNumber(log.temperature) ? log.temperature : null,
+              humidity_pct: finiteNumber(log.humidity) ? log.humidity : null,
+              shock_g: finiteNumber(log.shock) ? log.shock : null,
+              light_lux: null,
+              tilt_deg: finiteNumber(log.tilt_angle) ? log.tilt_angle : null,
+              battery_pct: null,
+              network_type: null,
+              firmware_version: null,
+              gps: latitude !== null && longitude !== null ? {
+                lat: latitude,
+                lng: longitude,
+                speed_kmh: finiteNumber(log.speed) ? log.speed : undefined,
+                heading_deg: finiteNumber(log.heading) ? log.heading : undefined,
+              } : null,
+              bundle_id: null,
+              payload_hash: String(log.hash_value || `ws-${Math.random().toString(16).slice(2, 10)}`),
+              signature: null,
+              verification_status: null,
+              ingest_status: null,
+              created_at: recordedAt,
             };
 
             setTelemetry((curr) => [...curr, entry].slice(-maxPoints));
@@ -172,20 +184,32 @@ function LiveTelemetryModule({
             if (latitude === null || longitude === null) return;
 
             const recordedAt = String(payload.timestamp || new Date().toISOString());
-            const entry: SensorLog = {
-              id: `ws-${shipmentId}-${recordedAt}-${Math.random().toString(16).slice(2, 8)}`,
+            const entry: TelemetryEvent = {
+              event_id: `ws-${shipmentId}-${recordedAt}-${Math.random().toString(16).slice(2, 8)}`,
               shipment_id: String(payload.shipment_id || shipmentId),
-              temperature: finiteNumber(payload.temperature) ? payload.temperature : null,
-              humidity: finiteNumber(payload.humidity) ? payload.humidity : null,
-              shock: finiteNumber(payload.shock) ? payload.shock : null,
-              light_exposure: null,
-              tilt_angle: finiteNumber(payload.tilt_angle) ? payload.tilt_angle : null,
-              latitude,
-              longitude,
-              speed: finiteNumber(payload.speed) ? payload.speed : null,
-              heading: finiteNumber(payload.heading) ? payload.heading : null,
-              hash_value: `ws-${Math.random().toString(16).slice(2, 10)}`,
-              recorded_at: recordedAt,
+              device_id: String(payload.device_id || 'ws-device'),
+              ts: recordedAt,
+              seq_no: 0,
+              temperature_c: finiteNumber(payload.temperature) ? payload.temperature : null,
+              humidity_pct: finiteNumber(payload.humidity) ? payload.humidity : null,
+              shock_g: finiteNumber(payload.shock) ? payload.shock : null,
+              light_lux: null,
+              tilt_deg: finiteNumber(payload.tilt_angle) ? payload.tilt_angle : null,
+              battery_pct: null,
+              network_type: null,
+              firmware_version: null,
+              gps: {
+                lat: latitude,
+                lng: longitude,
+                speed_kmh: finiteNumber(payload.speed) ? payload.speed : undefined,
+                heading_deg: finiteNumber(payload.heading) ? payload.heading : undefined,
+              },
+              bundle_id: null,
+              payload_hash: `ws-${Math.random().toString(16).slice(2, 10)}`,
+              signature: null,
+              verification_status: null,
+              ingest_status: null,
+              created_at: recordedAt,
             };
 
             setTelemetry((curr) => [...curr, entry].slice(-maxPoints));
@@ -211,25 +235,32 @@ function LiveTelemetryModule({
     };
   }, [shipmentId, maxPoints, telemetryWsEnabled]);
 
-  const routePoints = useMemo(() => telemetry.filter((x) => finiteNumber(x.latitude) && finiteNumber(x.longitude)), [telemetry]);
+  const routePoints = useMemo(
+    () => telemetry.filter((x) => finiteNumber(x.gps?.lat) && finiteNumber(x.gps?.lng)),
+    [telemetry],
+  );
   const hasTelemetryRecords = telemetry.length > 0;
   const latest = routePoints.at(-1) ?? null;
   const start = routePoints[0] ?? null;
-  const startOverlapsCurrent = !!start && !!latest && Math.abs((start.latitude as number) - (latest.latitude as number)) < 1e-5 && Math.abs((start.longitude as number) - (latest.longitude as number)) < 1e-5;
+  const startOverlapsCurrent =
+    !!start &&
+    !!latest &&
+    Math.abs((start.gps?.lat as number) - (latest.gps?.lat as number)) < 1e-5 &&
+    Math.abs((start.gps?.lng as number) - (latest.gps?.lng as number)) < 1e-5;
 
   useEffect(() => {
     if (!routePoints.length || displayPoint) return;
-    setDisplayPoint({ latitude: routePoints[0].latitude as number, longitude: routePoints[0].longitude as number });
+    setDisplayPoint({ latitude: routePoints[0].gps?.lat as number, longitude: routePoints[0].gps?.lng as number });
   }, [routePoints, displayPoint]);
 
   useEffect(() => {
     if (!latest) return;
-    const from = displayPoint ?? { latitude: latest.latitude as number, longitude: latest.longitude as number };
-    const to = { latitude: latest.latitude as number, longitude: latest.longitude as number };
-    const startAt = performance.now();
+    const from = displayPoint ?? { latitude: latest.gps?.lat as number, longitude: latest.gps?.lng as number };
+    const to = { latitude: latest.gps?.lat as number, longitude: latest.gps?.lng as number };
+    const startTime = performance.now();
     if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
     const animate = (now: number) => {
-      const p = Math.min(1, (now - startAt) / 1400);
+      const p = Math.min(1, (now - startTime) / 1400);
       const eased = 1 - (1 - p) * (1 - p);
       setDisplayPoint({ latitude: from.latitude + (to.latitude - from.latitude) * eased, longitude: from.longitude + (to.longitude - from.longitude) * eased });
       if (p < 1) rafRef.current = window.requestAnimationFrame(animate);
@@ -238,11 +269,11 @@ function LiveTelemetryModule({
     return () => {
       if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
     };
-  }, [latest?.latitude, latest?.longitude]);
+  }, [latest?.gps?.lat, latest?.gps?.lng]);
 
   const displayCoords = useMemo(() => {
     if (!displayPoint || routePoints.length === 0) return [];
-    const base = routePoints.slice(0, -1).map((p) => [p.longitude as number, p.latitude as number]);
+    const base = routePoints.slice(0, -1).map((p) => [p.gps?.lng as number, p.gps?.lat as number]);
     return [...base, [displayPoint.longitude, displayPoint.latitude]];
   }, [displayPoint, routePoints]);
   const historyCoords = displayCoords.length > 1 ? displayCoords.slice(0, -1) : [];
@@ -273,15 +304,15 @@ function LiveTelemetryModule({
   const windowed = useMemo(() => {
     if (rangeMode === 'full') return telemetry;
     const latestLog = telemetry.at(-1);
-    const end = parseTime(latestLog?.recorded_at || new Date().toISOString());
+    const end = parseTime(latestLog?.ts || new Date().toISOString());
     const startMs = end - RANGE_MS[rangeMode];
-    return telemetry.filter((row) => parseTime(row.recorded_at) >= startMs);
+    return telemetry.filter((row) => parseTime(row.ts) >= startMs);
   }, [telemetry, rangeMode]);
 
-  const tempData = windowed.filter((x) => finiteNumber(x.temperature)).map((x) => [x.recorded_at, x.temperature as number] as [string, number]);
-  const humData = windowed.filter((x) => finiteNumber(x.humidity)).map((x) => [x.recorded_at, x.humidity as number] as [string, number]);
-  const shockData = windowed.filter((x) => finiteNumber(x.shock)).map((x) => [x.recorded_at, x.shock as number] as [string, number]);
-  const tiltData = windowed.filter((x) => finiteNumber(x.tilt_angle)).map((x) => [x.recorded_at, x.tilt_angle as number] as [string, number]);
+  const tempData = windowed.filter((x) => finiteNumber(x.temperature_c)).map((x) => [x.ts, x.temperature_c as number] as [string, number]);
+  const humData = windowed.filter((x) => finiteNumber(x.humidity_pct)).map((x) => [x.ts, x.humidity_pct as number] as [string, number]);
+  const shockData = windowed.filter((x) => finiteNumber(x.shock_g)).map((x) => [x.ts, x.shock_g as number] as [string, number]);
+  const tiltData = windowed.filter((x) => finiteNumber(x.tilt_deg)).map((x) => [x.ts, x.tilt_deg as number] as [string, number]);
   const hasAnyMetricSamples = tempData.length > 0 || humData.length > 0 || shockData.length > 0 || tiltData.length > 0;
   const metricCards = [
     { key: 'temperature', label: 'Temperature', unit: 'C', color: '#f97316', data: tempData },
@@ -319,10 +350,10 @@ function LiveTelemetryModule({
                 <NavigationControl position="top-right" />
                 {showHistory && historyCoords.length > 1 && <Source id="history-src" type="geojson" data={{ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: historyCoords }, properties: {} }] }}><Layer {...historyLayer} /></Source>}
                 {activeCoords.length > 1 && <Source id="active-src" type="geojson" data={{ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: activeCoords }, properties: {} }] }}><Layer {...activeLayer} /></Source>}
-                {start && <Marker longitude={start.longitude as number} latitude={start.latitude as number} anchor="bottom"><motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center gap-1" style={startOverlapsCurrent ? { transform: 'translateY(-12px)' } : undefined}><div className="rounded-full bg-emerald-500/95 px-2 py-1 text-[10px] font-semibold text-white">Start</div><div className="relative h-3 w-3"><span className="absolute inset-0 rounded-full border-2 border-white bg-emerald-500" /><span className="absolute inset-0 -m-2 animate-ping rounded-full bg-emerald-400/25" /></div></motion.div></Marker>}
-                {latest && <Marker longitude={latest.longitude as number} latitude={latest.latitude as number} anchor="bottom"><motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center gap-1"><div className="rounded-full bg-rose-500/95 px-2 py-1 text-[10px] font-semibold text-white">Destination</div><div className="h-3 w-3 rounded-full border-2 border-white bg-rose-500" /></motion.div></Marker>}
+                {start && <Marker longitude={start.gps?.lng as number} latitude={start.gps?.lat as number} anchor="bottom"><motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center gap-1" style={startOverlapsCurrent ? { transform: 'translateY(-12px)' } : undefined}><div className="rounded-full bg-emerald-500/95 px-2 py-1 text-[10px] font-semibold text-white">Start</div><div className="relative h-3 w-3"><span className="absolute inset-0 rounded-full border-2 border-white bg-emerald-500" /><span className="absolute inset-0 -m-2 animate-ping rounded-full bg-emerald-400/25" /></div></motion.div></Marker>}
+                {latest && <Marker longitude={latest.gps?.lng as number} latitude={latest.gps?.lat as number} anchor="bottom"><motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center gap-1"><div className="rounded-full bg-rose-500/95 px-2 py-1 text-[10px] font-semibold text-white">Destination</div><div className="h-3 w-3 rounded-full border-2 border-white bg-rose-500" /></motion.div></Marker>}
                 {displayPoint && <Marker longitude={displayPoint.longitude} latitude={displayPoint.latitude} anchor="center"><button type="button" onClick={() => setShowPopup(true)} className="relative h-5 w-5 rounded-full border-2 border-white bg-sky-500 ring-2 ring-sky-300/50"><span className="absolute inset-0 -m-2 animate-ping rounded-full bg-sky-400/25" /></button></Marker>}
-                {showPopup && latest && <Popup longitude={latest.longitude as number} latitude={latest.latitude as number} anchor="top" onClose={() => setShowPopup(false)} closeOnClick={false}><div className="space-y-1 text-xs"><p>Latitude: <span className="font-semibold">{formatNumber(latest.latitude as number, 5)}</span></p><p>Longitude: <span className="font-semibold">{formatNumber(latest.longitude as number, 5)}</span></p><p>Temperature: {formatNumber(latest.temperature)} degC</p><p>{formatDateTime(latest.recorded_at)}</p></div></Popup>}
+                {showPopup && latest && <Popup longitude={latest.gps?.lng as number} latitude={latest.gps?.lat as number} anchor="top" onClose={() => setShowPopup(false)} closeOnClick={false}><div className="space-y-1 text-xs"><p>Latitude: <span className="font-semibold">{formatNumber(latest.gps?.lat as number, 5)}</span></p><p>Longitude: <span className="font-semibold">{formatNumber(latest.gps?.lng as number, 5)}</span></p><p>Temperature: {formatNumber(latest.temperature_c)} degC</p><p>{formatDateTime(latest.ts)}</p></div></Popup>}
                 <div className="pointer-events-none absolute left-3 top-3"><div className="pointer-events-auto flex items-center gap-2 rounded-lg bg-surface-900/80 px-3 py-2 ring-1 ring-slate-700/70"><button type="button" className="btn-secondary px-3 py-1 text-xs" onClick={() => displayPoint && mapRef.current?.easeTo({ center: [displayPoint.longitude, displayPoint.latitude], zoom: 11, duration: 600 })}>Zoom to current</button><button type="button" className="btn-secondary px-3 py-1 text-xs" onClick={fitToRoute}>Fit to Route</button></div></div>
               </MapView>
             </div>
@@ -331,7 +362,7 @@ function LiveTelemetryModule({
               <div className="mt-3 space-y-3">
                 <div className="flex items-center justify-between"><span className="text-slate-400">Current leg</span><span className="font-semibold">{(legs.find((x) => x.status === 'in_progress') || legs.at(-1)) ? `Leg ${(legs.find((x) => x.status === 'in_progress') || legs.at(-1))?.leg_number}` : 'N/A'}</span></div>
                 <div className="flex items-center justify-between"><span className="text-slate-400">Shipment status</span><span className="font-semibold">{status ?? 'N/A'}</span></div>
-                <div className="flex items-center justify-between"><span className="text-slate-400">Last update</span><span className="font-semibold">{latest ? formatDateTime(latest.recorded_at) : 'Awaiting data'}</span></div>
+                <div className="flex items-center justify-between"><span className="text-slate-400">Last update</span><span className="font-semibold">{latest ? formatDateTime(latest.ts) : 'Awaiting data'}</span></div>
                 <div className="rounded-lg border border-slate-700/70 bg-surface-900/80 p-3 text-xs text-slate-300"><p className="font-semibold text-slate-100">Origin to Destination</p><p className="mt-1">{origin || 'Unknown'} to {destination || 'Unknown'}</p></div>
                 {!!legs.length && <div className="space-y-2 text-xs text-slate-300"><p className="font-semibold text-slate-100">Shipment legs</p><div className="flex flex-wrap gap-2">{legs.map((leg) => <span key={leg.id} className={clsx('rounded-full px-3 py-1', leg.status === 'settled' ? 'bg-emerald-400/20 text-emerald-100' : leg.status === 'in_progress' ? 'bg-sky-400/20 text-sky-100' : 'bg-slate-500/20 text-slate-200')}>Leg {leg.leg_number}: {leg.from_location} to {leg.to_location}</span>)}</div></div>}
               </div>

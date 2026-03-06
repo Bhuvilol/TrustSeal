@@ -1,16 +1,18 @@
 import { FormEvent, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import ComplianceCard from '@/components/ComplianceCard';
 import EmptyState from '@/components/EmptyState';
 import ErrorState from '@/components/ErrorState';
 import LiveTelemetryModule from '@/components/LiveTelemetryModule';
 import LoadingState from '@/components/LoadingState';
+import ProofPanel from '@/components/ProofPanel';
 import SensorStatsStrip from '@/components/SensorStatsStrip';
 import StatusBadge from '@/components/StatusBadge';
+import { getLatestShipmentProof } from '@/api/proofs';
+import { getPipelineStatus, reconcilePipeline, retryAnchor, retryCustodyGate, retryIpfs } from '@/api/ops';
 import {
   completeShipmentLeg,
-  createCustodyCheckpoint,
   createShipmentLeg,
   startShipmentLeg,
   updateShipment,
@@ -21,6 +23,7 @@ import {
   useShipment,
   useShipmentCustody,
   useShipmentLegs,
+  useShipmentOverview,
   useShipmentSensorStats,
   useShipmentTelemetry,
 } from '@/hooks/useShipments';
@@ -37,44 +40,28 @@ interface LegFormState {
   to_location: string;
 }
 
-interface CustodyFormState {
-  leg_id: string;
-  biometric_verified: boolean;
-  blockchain_tx_hash: string;
-  merkle_root_hash: string;
-}
-
 const defaultLegForm: LegFormState = {
   leg_number: '',
   from_location: '',
   to_location: '',
 };
 
-const defaultCustodyForm: CustodyFormState = {
-  leg_id: '',
-  biometric_verified: false,
-  blockchain_tx_hash: '',
-  merkle_root_hash: '',
-};
-
 function ShipmentDetailsPage() {
   const { shipmentId } = useParams<{ shipmentId: string }>();
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const { showError, showSuccess } = useToast();
+  const { showError, showInfo, showSuccess } = useToast();
 
   const canManageLegs = hasPermission(user?.role, 'manage_legs');
-  const canManageCheckpoints = hasPermission(user?.role, 'manage_checkpoints');
   const canUpdateShipmentStatus = hasPermission(user?.role, 'update_shipment_status');
+  const canManageOperations = hasPermission(user?.role, 'manage_operations');
 
   const [isAddLegOpen, setIsAddLegOpen] = useState(false);
-  const [isAddCustodyOpen, setIsAddCustodyOpen] = useState(false);
   const [isSubmittingLeg, setIsSubmittingLeg] = useState(false);
-  const [isSubmittingCustody, setIsSubmittingCustody] = useState(false);
   const [pendingLegActionKey, setPendingLegActionKey] = useState<string | null>(null);
   const [pendingShipmentStatus, setPendingShipmentStatus] = useState<ShipmentStatus | null>(null);
+  const [pendingOpsAction, setPendingOpsAction] = useState<string | null>(null);
   const [legForm, setLegForm] = useState<LegFormState>(defaultLegForm);
-  const [custodyForm, setCustodyForm] = useState<CustodyFormState>(defaultCustodyForm);
 
   const {
     data: shipment,
@@ -83,6 +70,7 @@ function ShipmentDetailsPage() {
     error: shipmentErrorObj,
     refetch: refetchShipment,
   } = useShipment(shipmentId);
+  const { data: shipmentOverview } = useShipmentOverview(shipmentId);
   const {
     data: telemetry,
     isLoading: telemetryLoading,
@@ -110,6 +98,28 @@ function ShipmentDetailsPage() {
     data: attachedDevice,
     isError: deviceError,
   } = useDevice(shipment?.device_id);
+  const {
+    data: latestProof,
+    isLoading: proofLoading,
+    isError: proofError,
+    error: proofErrorObj,
+    refetch: refetchProof,
+  } = useQuery({
+    queryKey: ['proof', 'shipment-latest', shipment?.id],
+    queryFn: () => getLatestShipmentProof(shipment?.id as string),
+    enabled: Boolean(shipment?.id),
+    retry: 0,
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+  });
+  const { data: pipelineStatus } = useQuery({
+    queryKey: ['ops', 'pipeline-status', shipment?.id],
+    queryFn: () => getPipelineStatus(shipment?.id as string),
+    enabled: Boolean(shipment?.id),
+    retry: 0,
+    staleTime: 20_000,
+    gcTime: 2 * 60_000,
+  });
 
   const sortedLegs = useMemo(
     () => [...(legs ?? [])].sort((left, right) => left.leg_number - right.leg_number),
@@ -119,7 +129,7 @@ function ShipmentDetailsPage() {
   const sortedCustody = useMemo(
     () =>
       [...(custody ?? [])].sort(
-        (left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime(),
+        (left, right) => new Date(right.ts || right.created_at).getTime() - new Date(left.ts || left.created_at).getTime(),
       ),
     [custody],
   );
@@ -170,11 +180,14 @@ function ShipmentDetailsPage() {
   const refreshShipmentData = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId] }),
+      queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId, 'overview'] }),
       queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId, 'logs'] }),
       queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId, 'telemetry'] }),
       queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId, 'sensor-stats'] }),
       queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId, 'legs'] }),
       queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId, 'custody'] }),
+      queryClient.invalidateQueries({ queryKey: ['proof', 'shipment-latest', shipmentId] }),
+      queryClient.invalidateQueries({ queryKey: ['ops', 'pipeline-status', shipmentId] }),
       queryClient.invalidateQueries({ queryKey: ['shipments'] }),
     ]);
   };
@@ -251,28 +264,50 @@ function ShipmentDetailsPage() {
     }
   };
 
-  const handleAddCustody = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setIsSubmittingCustody(true);
+  const handleOpsAction = async (
+    action: 'retry-ipfs' | 'retry-custody-gate' | 'retry-anchor' | 'reconcile',
+  ) => {
+    const bundleId =
+      pipelineStatus?.shipment?.latest_bundle_id || shipmentOverview?.latest_bundle?.bundle_id || latestProof?.bundle_id;
+    setPendingOpsAction(action);
 
     try {
-      await createCustodyCheckpoint({
-        shipment_id: shipmentId,
-        leg_id: custodyForm.leg_id || null,
-        biometric_verified: custodyForm.biometric_verified,
-        blockchain_tx_hash: custodyForm.blockchain_tx_hash.trim() || null,
-        merkle_root_hash: custodyForm.merkle_root_hash.trim() || null,
-      });
-      showSuccess('Custody checkpoint created.');
+      if (action === 'retry-ipfs') {
+        if (!bundleId) {
+          showError('No bundle is available for IPFS retry.');
+          return;
+        }
+        const response = await retryIpfs(bundleId);
+        showSuccess(`IPFS retry queued for bundle ${response.bundle_id}.`);
+      } else if (action === 'retry-custody-gate') {
+        if (!bundleId) {
+          showError('No bundle is available for custody gate retry.');
+          return;
+        }
+        const response = await retryCustodyGate(bundleId);
+        showSuccess(`Custody gate re-run completed for bundle ${response.bundle_id}.`);
+      } else if (action === 'retry-anchor') {
+        if (!bundleId) {
+          showError('No bundle is available for anchor retry.');
+          return;
+        }
+        const response = await retryAnchor(bundleId);
+        showSuccess(`Anchor retry queued for bundle ${response.bundle_id}.`);
+      } else {
+        const response = await reconcilePipeline(shipment.id, true);
+        showInfo(
+          `Reconciliation scanned ${response.scanned_batches} batches and repaired ${response.repaired_bundle_ids.length}.`,
+        );
+      }
+
       await refreshShipmentData();
-      setIsAddCustodyOpen(false);
-      setCustodyForm(defaultCustodyForm);
-    } catch (custodyError) {
-      if (getHttpStatus(custodyError) !== 403) {
-        showError(getErrorMessage(custodyError, 'Unable to create custody checkpoint.'));
+      void refetchProof();
+    } catch (opsError) {
+      if (getHttpStatus(opsError) !== 403) {
+        showError(getErrorMessage(opsError, 'Unable to complete the requested pipeline operation.'));
       }
     } finally {
-      setIsSubmittingCustody(false);
+      setPendingOpsAction(null);
     }
   };
 
@@ -339,14 +374,114 @@ function ShipmentDetailsPage() {
             </div>
           )}
         </div>
-
         <div className="grid gap-3 text-sm text-slate-300 md:grid-cols-2">
           <p>Shipment ID: {shipment.id}</p>
           <p>Created: {formatDateTime(shipment.created_at)}</p>
           <p>Description: {shipment.description || 'N/A'}</p>
           <p>Device ID: {shipment.device_id}</p>
+          <p>Latest Bundle: {shipmentOverview?.latest_bundle?.bundle_id || 'Not created yet'}</p>
+          <p>Latest Anchor: {shipmentOverview?.latest_bundle?.anchor_status || 'Not anchored yet'}</p>
         </div>
       </section>
+
+      {pipelineStatus?.shipment && (
+        <section className="panel p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-slate-100">Pipeline Status</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              {canManageOperations && (
+                <>
+                  <button
+                    type="button"
+                    className="btn-secondary px-3 py-2 text-xs"
+                    onClick={() => void handleOpsAction('retry-ipfs')}
+                    disabled={pendingOpsAction !== null}
+                  >
+                    {pendingOpsAction === 'retry-ipfs' ? 'Retrying IPFS...' : 'Retry IPFS'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary px-3 py-2 text-xs"
+                    onClick={() => void handleOpsAction('retry-custody-gate')}
+                    disabled={pendingOpsAction !== null}
+                  >
+                    {pendingOpsAction === 'retry-custody-gate' ? 'Checking custody...' : 'Retry Custody Gate'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary px-3 py-2 text-xs"
+                    onClick={() => void handleOpsAction('retry-anchor')}
+                    disabled={pendingOpsAction !== null}
+                  >
+                    {pendingOpsAction === 'retry-anchor' ? 'Retrying anchor...' : 'Retry Anchor'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary px-3 py-2 text-xs"
+                    onClick={() => void handleOpsAction('reconcile')}
+                    disabled={pendingOpsAction !== null}
+                  >
+                    {pendingOpsAction === 'reconcile' ? 'Reconciling...' : 'Reconcile'}
+                  </button>
+                </>
+              )}
+              <span className="text-xs uppercase tracking-[0.14em] text-slate-400">
+                Canonical ops state
+              </span>
+            </div>
+          </div>
+          <div className="grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Ingest</p>
+              <p className="mt-2 font-semibold text-slate-100">{pipelineStatus.shipment.ingest}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Batch</p>
+              <p className="mt-2 font-semibold text-slate-100">{pipelineStatus.shipment.batch}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Custody</p>
+              <p className="mt-2 font-semibold text-slate-100">{pipelineStatus.shipment.custody}</p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Anchor</p>
+              <p className="mt-2 font-semibold text-slate-100">{pipelineStatus.shipment.anchor}</p>
+            </div>
+          </div>
+          {(pipelineStatus.shipment.latest_bundle_id || pipelineStatus.shipment.latest_ipfs_cid || pipelineStatus.shipment.latest_tx_hash) && (
+            <div className="mt-4 grid gap-2 text-xs text-slate-400 md:grid-cols-3">
+              <p>Bundle: {pipelineStatus.shipment.latest_bundle_id || 'N/A'}</p>
+              <p className="truncate">IPFS CID: {pipelineStatus.shipment.latest_ipfs_cid || 'N/A'}</p>
+              <p className="truncate">Tx Hash: {pipelineStatus.shipment.latest_tx_hash || 'N/A'}</p>
+            </div>
+          )}
+          {pipelineStatus.shipment.error_message && (
+            <p className="mt-3 rounded-xl border border-amber-300/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+              {pipelineStatus.shipment.error_message}
+            </p>
+          )}
+        </section>
+      )}
+
+      {proofLoading ? (
+        <div className="panel p-5">
+          <p className="text-sm text-slate-400">Loading proof state...</p>
+        </div>
+      ) : proofError ? (
+        <div className="panel p-5">
+          <h2 className="mb-3 text-lg font-semibold text-slate-100">Proof & Chain Anchor</h2>
+          <p className="rounded-xl border border-slate-700 bg-surface-800/70 px-3 py-2 text-sm text-slate-400">
+            {getErrorMessage(proofErrorObj, 'Proof state is unavailable for this shipment.')}
+          </p>
+        </div>
+      ) : latestProof ? (
+        <ProofPanel proof={latestProof} onRefresh={() => void refetchProof()} isRefreshing={proofLoading} />
+      ) : (
+        <div className="panel p-5">
+          <h2 className="mb-3 text-lg font-semibold text-slate-100">Proof & Chain Anchor</h2>
+          <p className="text-sm text-slate-400">No proof bundle found yet for this shipment.</p>
+        </div>
+      )}
 
       <section className="panel p-5">
         <h2 className="text-lg font-semibold text-slate-100">Attached Device</h2>
@@ -514,130 +649,33 @@ function ShipmentDetailsPage() {
 
       <section className="panel p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold text-slate-100">Custody Checkpoints</h2>
-          {canManageCheckpoints && (
-            <button
-              type="button"
-              className="btn-primary px-3 py-2 text-sm"
-              onClick={() => setIsAddCustodyOpen(true)}
-            >
-              Add Custody Checkpoint
-            </button>
-          )}
+          <h2 className="text-lg font-semibold text-slate-100">Custody Timeline</h2>
         </div>
-
-        {isAddCustodyOpen && canManageCheckpoints && (
-          <form
-            className="mb-5 grid gap-4 rounded-xl border border-slate-700/70 p-4 md:grid-cols-2"
-            onSubmit={handleAddCustody}
-          >
-            <div className="space-y-1 md:col-span-2">
-              <label htmlFor="custody_shipment_id" className="text-sm text-slate-300">
-                Shipment ID
-              </label>
-              <input id="custody_shipment_id" type="text" className="input-field" value={shipmentId} disabled />
-            </div>
-
-            <div className="space-y-1">
-              <label htmlFor="custody_leg_id" className="text-sm text-slate-300">
-                Leg
-              </label>
-              <select
-                id="custody_leg_id"
-                className="input-field"
-                value={custodyForm.leg_id}
-                onChange={(event) => setCustodyForm((prev) => ({ ...prev, leg_id: event.target.value }))}
-              >
-                <option value="">No leg selected</option>
-                {sortedLegs.map((leg) => (
-                  <option key={leg.id} value={leg.id}>
-                    Leg {leg.leg_number}: {leg.from_location} {'->'} {leg.to_location}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-1">
-              <label htmlFor="custody_blockchain_hash" className="text-sm text-slate-300">
-                Blockchain TX Hash
-              </label>
-              <input
-                id="custody_blockchain_hash"
-                type="text"
-                className="input-field"
-                value={custodyForm.blockchain_tx_hash}
-                onChange={(event) =>
-                  setCustodyForm((prev) => ({ ...prev, blockchain_tx_hash: event.target.value }))
-                }
-              />
-            </div>
-
-            <div className="space-y-1 md:col-span-2">
-              <label htmlFor="custody_merkle_hash" className="text-sm text-slate-300">
-                Merkle Root Hash
-              </label>
-              <input
-                id="custody_merkle_hash"
-                type="text"
-                className="input-field"
-                value={custodyForm.merkle_root_hash}
-                onChange={(event) =>
-                  setCustodyForm((prev) => ({ ...prev, merkle_root_hash: event.target.value }))
-                }
-              />
-            </div>
-
-            <label className="md:col-span-2 inline-flex items-center gap-2 text-sm text-slate-300">
-              <input
-                type="checkbox"
-                checked={custodyForm.biometric_verified}
-                onChange={(event) =>
-                  setCustodyForm((prev) => ({ ...prev, biometric_verified: event.target.checked }))
-                }
-              />
-              Biometric Verified
-            </label>
-
-            <div className="md:col-span-2 flex flex-wrap gap-2">
-              <button type="submit" className="btn-primary" disabled={isSubmittingCustody}>
-                {isSubmittingCustody ? 'Saving...' : 'Create Checkpoint'}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setIsAddCustodyOpen(false);
-                  setCustodyForm(defaultCustodyForm);
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        )}
 
         {custodyError ? (
           <p className="rounded-xl border border-slate-700 bg-surface-800/70 px-3 py-2 text-sm text-slate-400">
-            {getErrorMessage(custodyErrorObj, 'Custody checkpoints could not be loaded right now.')}
+            {getErrorMessage(custodyErrorObj, 'Custody timeline could not be loaded right now.')}
           </p>
         ) : sortedCustody.length === 0 ? (
           <p className="rounded-xl border border-slate-700 bg-surface-800/70 px-3 py-2 text-sm text-slate-400">
-            No custody checkpoints recorded for this shipment.
+            No custody verification events recorded for this shipment.
           </p>
         ) : (
           <ol className="space-y-4">
             {sortedCustody.map((checkpoint, index) => (
-              <li key={checkpoint.id} className="relative pl-8">
+              <li key={checkpoint.custody_event_id} className="relative pl-8">
                 {index < sortedCustody.length - 1 && (
                   <span className="absolute left-[7px] top-6 h-[calc(100%+0.5rem)] w-px bg-slate-600" />
                 )}
                 <span className="absolute left-0 top-1.5 h-4 w-4 rounded-full border border-brand-300 bg-brand-500/25" />
                 <article className="rounded-xl border border-slate-700/70 bg-surface-800/60 p-4 text-sm text-slate-200">
-                  <p>Verified by: {checkpoint.verified_by || 'N/A'}</p>
-                  <p>Timestamp: {formatDateTime(checkpoint.timestamp)}</p>
-                  <p>Biometric verified: {checkpoint.biometric_verified ? 'Yes' : 'No'}</p>
+                  <p>Verifier user: {checkpoint.verifier_user_id || 'N/A'}</p>
+                  <p>Verifier device: {checkpoint.verifier_device_id || 'N/A'}</p>
+                  <p>Timestamp: {formatDateTime(checkpoint.ts || checkpoint.created_at)}</p>
+                  <p>Fingerprint result: {checkpoint.fingerprint_result || 'unknown'}</p>
+                  <p>Verification status: {checkpoint.verification_status || 'unknown'}</p>
                   <p className="max-w-full truncate font-mono text-xs text-slate-300">
-                    Blockchain tx hash: {checkpoint.blockchain_tx_hash || 'N/A'}
+                    Approval hash: {checkpoint.approval_hash || 'N/A'}
                   </p>
                 </article>
               </li>

@@ -1,4 +1,4 @@
-import type { SensorLog, ShipmentSensorStats, ShipmentStatus } from '@/types';
+import type { ShipmentSensorStats, ShipmentStatus, TelemetryEvent } from '@/types';
 import { TEMPERATURE_THRESHOLD_C } from '@/utils/constants';
 
 export interface SensorStats {
@@ -13,25 +13,25 @@ export interface SensorStats {
   complianceStatus: 'Valid' | 'Compromised';
 }
 
-export function sortLogsByRecordedAt(logs: SensorLog[]): SensorLog[] {
+export function sortLogsByRecordedAt(logs: TelemetryEvent[]): TelemetryEvent[] {
   return [...logs].sort(
-    (left, right) => new Date(left.recorded_at).getTime() - new Date(right.recorded_at).getTime(),
+    (left, right) => new Date(left.ts).getTime() - new Date(right.ts).getTime(),
   );
 }
 
 export function calculateSensorStats(
-  logs: SensorLog[],
+  logs: TelemetryEvent[],
   shipmentStatus?: ShipmentStatus,
 ): SensorStats {
   const sortedLogs = sortLogsByRecordedAt(logs);
   const latest = sortedLogs.at(-1) ?? null;
 
   const temperatureValues = sortedLogs
-    .map((entry) => entry.temperature)
+    .map((entry) => entry.temperature_c)
     .filter((value): value is number => typeof value === 'number');
 
   const shockValues = sortedLogs
-    .map((entry) => entry.shock)
+    .map((entry) => entry.shock_g)
     .filter((value): value is number => typeof value === 'number');
 
   const averageTemperature =
@@ -57,7 +57,7 @@ export function calculateSensorStats(
     minTemperature,
     maxTemperature,
     maxShock,
-    lastUpdate: latest?.recorded_at ?? null,
+    lastUpdate: latest?.ts ?? null,
     hasTemperatureBreach,
     complianceStatus,
   };

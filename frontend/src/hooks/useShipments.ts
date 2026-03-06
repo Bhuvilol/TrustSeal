@@ -3,8 +3,7 @@ import {
   getShipmentById,
   getShipmentCustody,
   getShipmentLegs,
-  getShipmentLogs,
-  getShipmentLogsWithParams,
+  getShipmentOverview,
   getShipmentSensorStats,
   getShipmentTelemetry,
   getShipments,
@@ -50,34 +49,11 @@ export function useShipment(shipmentId: string | undefined) {
   });
 }
 
-export function useShipmentLogs(shipmentId: string | undefined) {
+export function useShipmentOverview(shipmentId: string | undefined) {
   return useQuery({
-    queryKey: ['shipment', shipmentId, 'logs'],
-    queryFn: () => getShipmentLogs(shipmentId as string),
+    queryKey: ['shipment', shipmentId, 'overview'],
+    queryFn: () => getShipmentOverview(shipmentId as string),
     enabled: Boolean(shipmentId),
-    retry: 0,
-    staleTime: 30_000,
-    gcTime: 5 * 60_000,
-  });
-}
-
-interface QueryOptions {
-  enabled?: boolean;
-}
-
-export function useShipmentLogsWithParams(
-  shipmentId: string | undefined,
-  filters?: TelemetryFilters,
-  options?: QueryOptions,
-) {
-  const skip = filters?.skip ?? 0;
-  const limit = filters?.limit ?? 1000;
-  const enabled = options?.enabled ?? Boolean(shipmentId);
-
-  return useQuery({
-    queryKey: ['shipment', shipmentId, 'logs', skip, limit],
-    queryFn: () => getShipmentLogsWithParams(shipmentId as string, { skip, limit }),
-    enabled,
     retry: 0,
     staleTime: 30_000,
     gcTime: 5 * 60_000,

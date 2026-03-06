@@ -1,47 +1,81 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, Cpu, Droplets, Thermometer, Waves } from 'lucide-react';
+import { AlertTriangle, Droplets, Thermometer, Waves } from 'lucide-react';
 import EmptyState from '@/components/EmptyState';
 import ErrorState from '@/components/ErrorState';
 import LoadingState from '@/components/LoadingState';
-import { useDevices } from '@/hooks/useDevices';
-import { buildDeviceIntelligence, type DeviceLogEntry, type DeviceLogSeverity } from '@/utils/device-intelligence';
+import { useShipmentTelemetry, useShipments } from '@/hooks/useShipments';
+import type { TelemetryEvent } from '@/types';
 import { getErrorMessage } from '@/utils/errors';
 
 type EventTypeFilter = 'all' | 'temperature' | 'shock' | 'humidity' | 'system';
+type DeviceLogSeverity = 'info' | 'warning' | 'critical';
 type SeverityFilter = 'all' | DeviceLogSeverity;
 
-interface DeviceLogRow extends DeviceLogEntry {
-  deviceId: string;
-  deviceName: string;
-  deviceUid: string;
+interface DeviceLogRow {
+  id: string;
+  shipmentId: string;
+  shipmentCode: string;
+  timestamp: string;
   eventType: EventTypeFilter;
+  severity: DeviceLogSeverity;
+  title: string;
+  description: string;
 }
 
-function detectEventType(log: DeviceLogEntry): EventTypeFilter {
-  const text = `${log.type} ${log.description}`.toLowerCase();
-  if (log.category === 'system') {
-    return 'system';
+function getSeverity(log: TelemetryEvent): DeviceLogSeverity {
+  const critical = (log.temperature_c ?? -999) > 8 || (log.shock_g ?? -999) > 2.2;
+  const warning =
+    (log.temperature_c ?? -999) > 7.4 ||
+    (log.shock_g ?? -999) > 1.5 ||
+    (log.humidity_pct ?? -999) > 75 ||
+    (log.tilt_deg ?? -999) > 24;
+  if (critical) {
+    return 'critical';
   }
-  if (text.includes('temp')) {
+  if (warning) {
+    return 'warning';
+  }
+  return 'info';
+}
+
+function detectEventType(log: TelemetryEvent): EventTypeFilter {
+  if (log.shock_g !== null && log.shock_g !== undefined) {
+    return 'shock';
+  }
+  if (log.temperature_c !== null && log.temperature_c !== undefined) {
     return 'temperature';
   }
-  if (text.includes('humidity')) {
+  if (log.humidity_pct !== null && log.humidity_pct !== undefined) {
     return 'humidity';
-  }
-  if (text.includes('shock') || text.includes('accelerometer') || text.includes('tilt')) {
-    return 'shock';
   }
   return 'system';
 }
 
+function buildDescription(log: TelemetryEvent): string {
+  const parts: string[] = [];
+  if (log.temperature_c !== null && log.temperature_c !== undefined) {
+    parts.push(`Temp ${log.temperature_c.toFixed(1)} C`);
+  }
+  if (log.humidity_pct !== null && log.humidity_pct !== undefined) {
+    parts.push(`Humidity ${log.humidity_pct.toFixed(1)}%`);
+  }
+  if (log.shock_g !== null && log.shock_g !== undefined) {
+    parts.push(`Shock ${log.shock_g.toFixed(2)} g`);
+  }
+  if (log.tilt_deg !== null && log.tilt_deg !== undefined) {
+    parts.push(`Tilt ${log.tilt_deg.toFixed(1)} deg`);
+  }
+  return parts.length > 0 ? parts.join(' | ') : 'Telemetry event recorded.';
+}
+
 function getSeverityClasses(severity: DeviceLogSeverity): string {
   if (severity === 'critical') {
-    return 'border-red-300/45 bg-red-500/15 text-red-100 shadow-[0_0_18px_rgba(239,68,68,0.22)]';
+    return 'border-red-300/45 bg-red-500/15 text-red-100';
   }
   if (severity === 'warning') {
-    return 'border-amber-300/45 bg-amber-500/15 text-amber-100 shadow-[0_0_16px_rgba(245,158,11,0.18)]';
+    return 'border-amber-300/45 bg-amber-500/15 text-amber-100';
   }
   return 'border-cyan-300/45 bg-cyan-500/15 text-cyan-100';
 }
@@ -56,50 +90,69 @@ function getEventIcon(eventType: EventTypeFilter) {
   if (eventType === 'shock') {
     return Waves;
   }
-  return Cpu;
+  return Thermometer;
 }
 
 function DeviceLogsPage() {
   const [searchParams] = useSearchParams();
-  const initialDeviceId = searchParams.get('device_id') ?? 'all';
-  const [deviceFilter, setDeviceFilter] = useState<string>(initialDeviceId);
+  const initialShipmentId = searchParams.get('shipment_id') ?? 'all';
+  const [shipmentFilter, setShipmentFilter] = useState<string>(initialShipmentId);
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all');
   const [eventTypeFilter, setEventTypeFilter] = useState<EventTypeFilter>('all');
-  const { data: devices, isLoading, isError, error, refetch } = useDevices();
+
+  const { data: shipments, isLoading: shipmentsLoading, isError: shipmentsError, error: shipmentsErrObj, refetch: refetchShipments } =
+    useShipments();
+  const selectedShipment = useMemo(
+    () => (shipments ?? []).find((shipment) => shipment.id === shipmentFilter),
+    [shipments, shipmentFilter],
+  );
+  const {
+    data: telemetry,
+    isLoading: telemetryLoading,
+    isError: telemetryError,
+    error: telemetryErrObj,
+    refetch: refetchTelemetry,
+  } = useShipmentTelemetry(selectedShipment?.id, { limit: 500 });
 
   const logs = useMemo<DeviceLogRow[]>(() => {
-    return (devices ?? [])
-      .flatMap((device) => {
-        const snapshot = buildDeviceIntelligence(device);
-        return snapshot.logs.map((log) => ({
-          ...log,
-          deviceId: device.id,
-          deviceName: device.model,
-          deviceUid: device.device_uid,
-          eventType: detectEventType(log),
-        }));
+    if (!selectedShipment || !telemetry) {
+      return [];
+    }
+    return telemetry
+      .map((log) => {
+        const eventType = detectEventType(log);
+        const severity = getSeverity(log);
+        return {
+          id: log.event_id,
+          shipmentId: selectedShipment.id,
+          shipmentCode: selectedShipment.shipment_code,
+          timestamp: log.ts,
+          eventType,
+          severity,
+          title: `${eventType.toUpperCase()} telemetry`,
+          description: buildDescription(log),
+        };
       })
       .sort((left, right) => right.timestamp.localeCompare(left.timestamp));
-  }, [devices]);
+  }, [selectedShipment, telemetry]);
 
   const filteredLogs = useMemo(() => {
     return logs.filter((log) => {
-      const matchesDevice = deviceFilter === 'all' || log.deviceId === deviceFilter;
       const matchesSeverity = severityFilter === 'all' || log.severity === severityFilter;
       const matchesType = eventTypeFilter === 'all' || log.eventType === eventTypeFilter;
-      return matchesDevice && matchesSeverity && matchesType;
+      return matchesSeverity && matchesType;
     });
-  }, [deviceFilter, severityFilter, eventTypeFilter, logs]);
+  }, [eventTypeFilter, logs, severityFilter]);
 
-  if (isLoading) {
-    return <LoadingState message="Loading device logs..." />;
+  if (shipmentsLoading) {
+    return <LoadingState message="Loading shipment logs..." />;
   }
 
-  if (isError) {
+  if (shipmentsError) {
     return (
       <ErrorState
-        message={getErrorMessage(error, 'Unable to load device logs.')}
-        onRetry={() => void refetch()}
+        message={getErrorMessage(shipmentsErrObj, 'Unable to load shipments.')}
+        onRetry={() => void refetchShipments()}
       />
     );
   }
@@ -108,25 +161,23 @@ function DeviceLogsPage() {
     <div className="space-y-6">
       <section className="panel p-5">
         <h1 className="text-2xl font-semibold text-slate-100">Device Logs</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Centralized event stream across all devices with operational severity filtering.
-        </p>
+        <p className="mt-1 text-sm text-slate-400">Real telemetry-derived event stream from shipment data.</p>
 
         <div className="mt-4 grid gap-3 md:grid-cols-3">
           <div>
-            <label htmlFor="log-device-filter" className="text-xs uppercase tracking-[0.14em] text-slate-400">
-              Device
+            <label htmlFor="log-shipment-filter" className="text-xs uppercase tracking-[0.14em] text-slate-400">
+              Shipment
             </label>
             <select
-              id="log-device-filter"
+              id="log-shipment-filter"
               className="input-field mt-2 py-2"
-              value={deviceFilter}
-              onChange={(event) => setDeviceFilter(event.target.value)}
+              value={shipmentFilter}
+              onChange={(event) => setShipmentFilter(event.target.value)}
             >
-              <option value="all">All devices</option>
-              {(devices ?? []).map((device) => (
-                <option key={device.id} value={device.id}>
-                  {device.device_uid}
+              <option value="all">Select shipment</option>
+              {(shipments ?? []).map((shipment) => (
+                <option key={shipment.id} value={shipment.id}>
+                  {shipment.shipment_code}
                 </option>
               ))}
             </select>
@@ -171,13 +222,22 @@ function DeviceLogsPage() {
         </div>
       </section>
 
-      {filteredLogs.length === 0 ? (
-        <EmptyState
-          title="No logs found"
-          description="No events match the selected filters."
+      {!selectedShipment ? (
+        <EmptyState title="Select a shipment" description="Choose a shipment to view real telemetry logs." />
+      ) : telemetryLoading ? (
+        <LoadingState message="Loading telemetry logs..." />
+      ) : telemetryError ? (
+        <ErrorState
+          message={getErrorMessage(telemetryErrObj, 'Unable to load telemetry logs.')}
+          onRetry={() => void refetchTelemetry()}
         />
+      ) : filteredLogs.length === 0 ? (
+        <EmptyState title="No logs found" description="No telemetry events match the selected filters." />
       ) : (
         <section className="panel p-4">
+          <div className="mb-3 text-xs uppercase tracking-[0.14em] text-slate-400">
+            Shipment {selectedShipment.shipment_code}
+          </div>
           <div className="max-h-[72vh] space-y-3 overflow-y-auto pr-1">
             <AnimatePresence initial={false}>
               {filteredLogs.map((log) => {
@@ -188,7 +248,9 @@ function DeviceLogsPage() {
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 8 }}
-                    className={`rounded-2xl border bg-slate-900/35 p-4 ${log.severity === 'critical' ? 'animate-critical-shake border-red-300/35' : 'border-white/10'}`}
+                    className={`rounded-2xl border bg-slate-900/35 p-4 ${
+                      log.severity === 'critical' ? 'border-red-300/35' : 'border-white/10'
+                    }`}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="flex items-start gap-3">
@@ -196,16 +258,16 @@ function DeviceLogsPage() {
                           <EventIcon className="h-4 w-4 text-cyan-200" />
                         </div>
                         <div>
-                          <p className="text-sm font-semibold text-slate-100">{log.type}</p>
-                          <p className="text-xs text-slate-300">{log.deviceName} ({log.deviceUid})</p>
+                          <p className="text-sm font-semibold text-slate-100">{log.title}</p>
+                          <p className="text-xs text-slate-300">Shipment {log.shipmentCode}</p>
                           <p className="mt-1 text-sm text-slate-300">{log.description}</p>
-                          <p className="mt-1 text-xs text-slate-400">
-                            {new Date(log.timestamp).toLocaleString()}
-                          </p>
+                          <p className="mt-1 text-xs text-slate-400">{new Date(log.timestamp).toLocaleString()}</p>
                         </div>
                       </div>
 
-                      <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.1em] ${getSeverityClasses(log.severity)}`}>
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.1em] ${getSeverityClasses(log.severity)}`}
+                      >
                         {log.severity === 'critical' && <AlertTriangle className="h-3.5 w-3.5" />}
                         {log.severity}
                       </span>

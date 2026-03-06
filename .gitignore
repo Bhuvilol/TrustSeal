@@ -3,9 +3,15 @@
 __pycache__/
 *.py[cod]
 .venv/
+.pytest_cache/
+*.db
+.kiro/
+.vscode/
 node_modules/
 dist/
 .vite/
 *.tsbuildinfo
 vite.config.js
 vite.config.d.ts
+contract/artifacts/
+contract/cache/

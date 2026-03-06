@@ -5,10 +5,14 @@
   "type": "commonjs",
   "scripts": {
     "compile": "hardhat compile",
-    "deploy:amoy": "hardhat run scripts/deploy.js --network amoy"
+    "test": "hardhat test",
+    "deploy:amoy": "hardhat run scripts/deploy.js --network amoy",
+    "deploy:polygon": "hardhat run scripts/deploy.js --network polygon",
+    "deploy:localhost": "hardhat run scripts/deploy.js --network localhost"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "chai": "^6.2.2",
     "dotenv": "^16.6.1",
     "ethers": "^6.15.0",
     "hardhat": "^2.24.3"

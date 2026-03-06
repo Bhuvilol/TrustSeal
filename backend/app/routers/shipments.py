@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from ..models.user import User
 from ..models.device import Device
 from ..models.shipment import Shipment, ShipmentLeg
-from ..models.sensor_log import SensorLog
 from ..models.telemetry_event import TelemetryEvent
 from ..models.custody_transfer import CustodyTransfer
 from ..models.telemetry_batch import TelemetryBatch
@@ -15,7 +14,7 @@ from ..models.ipfs_object import IpfsObject
 from ..models.chain_anchor import ChainAnchor
 from ..models.enums import ShipmentStatus, LegStatus, UserRole
 from ..schemas.shipment import Shipment as ShipmentSchema, ShipmentCreate, ShipmentUpdate, ShipmentWithDetails
-from ..schemas.sensor_log import SensorLog as SensorLogSchema, SensorLogCreate, SensorStats as SensorStatsSchema
+from ..schemas.sensor_stats import SensorStats as SensorStatsSchema
 from ..database import get_db
 import uuid
 from collections.abc import Iterable
@@ -24,7 +23,6 @@ from ..dependencies import get_current_active_user, require_roles
 from ..core.config import settings
 from ..services.realtime import build_realtime_event, shipment_event_dispatcher
 from ..services.sensor_stats_service import calculate_sensor_statistics
-from ..services.telemetry_stream_service import telemetry_stream_service
 
 router = APIRouter()
 
@@ -175,64 +173,6 @@ def update_shipment(
 
     return _to_plain(shipment)
 
-@router.post("/{shipment_id}/logs", response_model=List[SensorLogSchema])
-def add_sensor_logs(
-    shipment_id: uuid.UUID,
-    logs: List[SensorLogCreate],
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
-):
-    """Add sensor logs to a shipment"""
-    # Verify shipment exists
-    shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
-    if not shipment:
-        raise HTTPException(status_code=404, detail="Shipment not found")
-    
-    # Create sensor logs
-    db_logs = []
-    for log_data in logs:
-        log_payload = log_data.dict()
-        log_payload["shipment_id"] = shipment_id
-        db_log = SensorLog(**log_payload)
-        db.add(db_log)
-        db_logs.append(db_log)
-    
-    db.commit()
-    serialized_logs = []
-    for db_log in db_logs:
-        db.refresh(db_log)
-        log_payload = SensorLogSchema.model_validate(_to_plain(db_log)).model_dump(mode="json")
-        telemetry_stream_service.publish_sensor_log(log_payload)
-        serialized_logs.append(log_payload)
-        shipment_event_dispatcher.publish(
-            str(shipment_id),
-            build_realtime_event(
-                event="sensor_log.created",
-                shipment_id=str(shipment_id),
-                data={"log": log_payload},
-            ),
-        )
-
-    return serialized_logs
-
-@router.get("/{shipment_id}/logs", response_model=List[SensorLogSchema])
-def get_sensor_logs(
-    shipment_id: uuid.UUID,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user)
-):
-    """Get sensor logs for a specific shipment"""
-    # Verify shipment exists
-    shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
-    if not shipment:
-        raise HTTPException(status_code=404, detail="Shipment not found")
-    
-    logs = db.query(SensorLog).filter(SensorLog.shipment_id == shipment_id).offset(skip).limit(limit).all()
-    return [_to_plain(l) for l in logs]
-
-
 @router.get("/{shipment_id}/telemetry")
 def get_shipment_telemetry(
     shipment_id: uuid.UUID,
@@ -242,7 +182,7 @@ def get_shipment_telemetry(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Canonical telemetry timeline from telemetry_events; falls back to sensor_logs."""
+    """Canonical telemetry timeline from telemetry_events."""
     shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
     if not shipment:
         raise HTTPException(status_code=404, detail="Shipment not found")
@@ -257,60 +197,34 @@ def get_shipment_telemetry(
         q = q.filter(TelemetryEvent.ts <= to_dt)
 
     events = q.order_by(TelemetryEvent.ts.asc()).limit(limit).all()
-    if events:
-        out = []
-        for e in events:
-            metrics = e.metrics if isinstance(e.metrics, dict) else {}
-            out.append(
-                {
-                    "event_id": e.event_id,
-                    "ts": e.ts.isoformat() if e.ts else None,
-                    "seq_no": e.seq_no,
-                    "temperature_c": metrics.get("temperature_c"),
-                    "humidity_pct": metrics.get("humidity_pct"),
-                    "shock_g": metrics.get("shock_g"),
-                    "light_lux": metrics.get("light_lux"),
-                    "tilt_deg": metrics.get("tilt_deg"),
-                    "battery_pct": metrics.get("battery_pct"),
-                    "gps": e.gps if isinstance(e.gps, dict) else None,
-                    "ingest_status": e.ingest_status,
-                    "verification_status": e.verification_status,
-                    "bundle_id": str(e.bundle_id) if e.bundle_id else None,
-                    "payload_hash": e.payload_hash,
-                }
-            )
-        return out
-
-    legacy_q = db.query(SensorLog).filter(SensorLog.shipment_id == shipment_id)
-    if from_dt is not None:
-        legacy_q = legacy_q.filter(SensorLog.recorded_at >= from_dt)
-    if to_dt is not None:
-        legacy_q = legacy_q.filter(SensorLog.recorded_at <= to_dt)
-    legacy_logs = legacy_q.order_by(SensorLog.recorded_at.asc()).limit(limit).all()
-    return [
-        {
-            "event_id": str(l.id),
-            "ts": l.recorded_at.isoformat() if l.recorded_at else None,
-            "seq_no": None,
-            "temperature_c": l.temperature,
-            "humidity_pct": l.humidity,
-            "shock_g": l.shock,
-            "light_lux": None,
-            "tilt_deg": l.tilt_angle,
-            "battery_pct": None,
-            "gps": {
-                "lat": l.latitude,
-                "lng": l.longitude,
-                "speed_kmh": l.speed,
-                "heading_deg": l.heading,
-            },
-            "ingest_status": "legacy",
-            "verification_status": "legacy",
-            "bundle_id": None,
-            "payload_hash": l.hash_value,
-        }
-        for l in legacy_logs
-    ]
+    out = []
+    for e in events:
+        metrics = e.metrics if isinstance(e.metrics, dict) else {}
+        out.append(
+            {
+                "event_id": e.event_id,
+                "shipment_id": str(e.shipment_id),
+                "device_id": str(e.device_id),
+                "ts": e.ts.isoformat() if e.ts else None,
+                "seq_no": e.seq_no,
+                "temperature_c": metrics.get("temperature_c"),
+                "humidity_pct": metrics.get("humidity_pct"),
+                "shock_g": metrics.get("shock_g"),
+                "light_lux": metrics.get("light_lux"),
+                "tilt_deg": metrics.get("tilt_deg"),
+                "battery_pct": metrics.get("battery_pct"),
+                "network_type": metrics.get("network_type"),
+                "firmware_version": metrics.get("firmware_version"),
+                "gps": e.gps if isinstance(e.gps, dict) else None,
+                "ingest_status": e.ingest_status,
+                "verification_status": e.verification_status,
+                "bundle_id": str(e.bundle_id) if e.bundle_id else None,
+                "payload_hash": e.payload_hash,
+                "signature": e.signature,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+        )
+    return out
 
 
 @router.get("/{shipment_id}/custody")
@@ -352,6 +266,38 @@ def get_shipment_custody_timeline(
             "created_at": t.created_at.isoformat() if t.created_at else None,
         }
         for t in transfers
+    ]
+
+
+@router.get("/{shipment_id}/legs")
+def get_shipment_legs_timeline(
+    shipment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    shipment = db.query(Shipment).filter(Shipment.id == shipment_id).first()
+    if not shipment:
+        raise HTTPException(status_code=404, detail="Shipment not found")
+
+    legs = (
+        db.query(ShipmentLeg)
+        .filter(ShipmentLeg.shipment_id == shipment_id)
+        .order_by(ShipmentLeg.leg_number.asc())
+        .all()
+    )
+
+    return [
+        {
+            "id": str(leg.id),
+            "shipment_id": str(leg.shipment_id),
+            "leg_number": leg.leg_number,
+            "from_location": leg.from_location,
+            "to_location": leg.to_location,
+            "status": leg.status.value if hasattr(leg.status, "value") else str(leg.status),
+            "started_at": leg.started_at.isoformat() if leg.started_at else None,
+            "completed_at": leg.completed_at.isoformat() if leg.completed_at else None,
+        }
+        for leg in legs
     ]
 
 

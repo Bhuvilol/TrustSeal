@@ -40,13 +40,16 @@ if str(project_root) not in sys.path:
     print(f"Added to Python path: {project_root}")
 
 if __name__ == "__main__":
+    if not os.getenv("APP_PROCESS_ROLE"):
+        os.environ["APP_PROCESS_ROLE"] = "api"
+
     # Print the Python path for debugging
     print("\nPython path:")
     for p in sys.path:
         print(f"- {p}")
     
     # Start the FastAPI application
-    print("\nStarting FastAPI application...")
+    print(f"\nStarting FastAPI application with APP_PROCESS_ROLE={os.environ['APP_PROCESS_ROLE']}...")
     print("Access the API documentation at: http://127.0.0.1:8000/docs\n")
     
     reload_enabled = os.getenv("TRUSTSEAL_UVICORN_RELOAD", "false").lower() == "true"

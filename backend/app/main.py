@@ -45,6 +45,9 @@ def ensure_local_sqlite_schema() -> None:
 @app.on_event("startup")
 def start_worker_orchestrator() -> None:
     """Start all Redis stream workers via orchestrator."""
+    if not settings.RUN_WORKERS:
+        logger.info("Worker orchestrator startup skipped for process role=%s", settings.APP_PROCESS_ROLE)
+        return
     try:
         worker_orchestrator.startup()
     except Exception:
@@ -54,6 +57,8 @@ def start_worker_orchestrator() -> None:
 @app.on_event("shutdown")
 def stop_worker_orchestrator() -> None:
     """Gracefully shutdown all workers."""
+    if not settings.RUN_WORKERS:
+        return
     try:
         worker_orchestrator.shutdown(timeout=30.0)
     except Exception:
@@ -115,6 +120,7 @@ async def root():
 
 # Health check endpoint
 @app.get("/health")
+@app.get(settings.API_V1_STR + "/health")
 async def health_check():
     rag = await chat_service.health_status()
 
@@ -234,13 +240,11 @@ async def handle_unexpected_error(_request: Request, exc: Exception) -> JSONResp
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 # Import and include routers
-from .routers import auth, devices, shipments, sensor_logs, custody, legs, ws, chat, ingest, proofs, ops
+from .routers import auth, devices, shipments, legs, ws, chat, ingest, proofs, ops
 
 app.include_router(auth.router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
 app.include_router(devices.router, prefix=settings.API_V1_STR + "/devices", tags=["devices"])
 app.include_router(shipments.router, prefix=settings.API_V1_STR + "/shipments", tags=["shipments"])
-app.include_router(sensor_logs.router, prefix=settings.API_V1_STR + "/sensor-logs", tags=["sensor-logs"])
-app.include_router(custody.router, prefix=settings.API_V1_STR + "/custody", tags=["custody"])
 app.include_router(legs.router, prefix=settings.API_V1_STR + "/legs", tags=["legs"])
 app.include_router(ws.router, prefix=settings.API_V1_STR + "/ws", tags=["ws"])
 app.include_router(chat.router, prefix=settings.API_V1_STR, tags=["chat"])
