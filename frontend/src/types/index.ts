@@ -362,3 +362,24 @@ export interface WorkersStatusResponse {
   };
   workers: Record<string, WorkerSnapshot>;
 }
+
+export interface HealthServiceStatus {
+  enabled: boolean;
+  status: string;
+  error?: string;
+  http_status?: number;
+  latest_block?: number;
+  workers?: Record<string, WorkerSnapshot>;
+}
+
+export interface HealthResponse {
+  status: 'ok' | 'degraded';
+  rag: string;
+  services: {
+    postgres: HealthServiceStatus;
+    redis: HealthServiceStatus;
+    workers: HealthServiceStatus;
+    ipfs: HealthServiceStatus;
+    polygon: HealthServiceStatus;
+  };
+}

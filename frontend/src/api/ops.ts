@@ -2,6 +2,7 @@ import { apiClient } from '@/api/axios';
 import { API_PREFIX } from '@/utils/constants';
 import type {
   DeadLetterReprocessResponse,
+  HealthResponse,
   PipelineStatusResponse,
   ReconcileResponse,
   RetryAnchorResponse,
@@ -9,6 +10,11 @@ import type {
   RetryIpfsResponse,
   WorkersStatusResponse,
 } from '@/types';
+
+export async function getSystemHealth(): Promise<HealthResponse> {
+  const { data } = await apiClient.get<HealthResponse>(`/health`);
+  return data;
+}
 
 export async function getPipelineStatus(shipmentId?: string): Promise<PipelineStatusResponse> {
   const { data } = await apiClient.get<PipelineStatusResponse>(`${API_PREFIX}/ops/pipeline-status`, {

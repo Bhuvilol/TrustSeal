@@ -145,7 +145,36 @@ class IngestVerificationService:
         }
         wire = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
         computed = hashlib.sha256(wire).hexdigest()
-        return computed == payload.payload_hash.lower()
+        if computed == payload.payload_hash.lower():
+            return True
+
+        # Legacy Arduino tracker compatibility:
+        # earlier firmware hashed the same semantic payload in insertion order
+        # rather than backend-sorted canonical order. Accept both to keep
+        # deployed tracker firmware interoperable.
+        legacy_canonical: dict[str, Any] = {
+            "battery_pct": payload.battery_pct,
+            "device_id": payload.device_id,
+            "device_uid": payload.device_uid,
+            "event_id": payload.event_id,
+            "firmware_version": payload.firmware_version,
+            "gps": payload.gps.model_dump() if payload.gps else None,
+            "idempotency_key": payload.idempotency_key,
+            "light_lux": payload.light_lux,
+            "network_type": payload.network_type,
+            "pubkey_id": payload.pubkey_id,
+            "seq_no": payload.seq_no,
+            "shipment_id": payload.shipment_id,
+            "sig_alg": payload.sig_alg,
+            "ts": payload.ts,
+            "humidity_pct": payload.humidity_pct,
+            "temperature_c": payload.temperature_c,
+            "shock_g": payload.shock_g,
+            "tilt_deg": payload.tilt_deg,
+        }
+        legacy_wire = json.dumps(legacy_canonical, separators=(",", ":")).encode("utf-8")
+        legacy_computed = hashlib.sha256(legacy_wire).hexdigest()
+        return legacy_computed == payload.payload_hash.lower()
 
     def _verify_custody_approval_hash(self, payload: CustodyIngestRequest) -> bool:
         canonical: dict[str, Any] = {

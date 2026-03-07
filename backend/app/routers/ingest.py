@@ -15,6 +15,7 @@ from ..schemas.common import ApiError, ApiSuccess
 from ..schemas.ingest import CustodyIngestRequest, TelemetryIngestRequest
 from ..services.idempotency_service import idempotency_service
 from ..services.ingest_verification_service import ingest_verification_service
+from ..services.realtime import build_realtime_event, shipment_event_dispatcher
 from ..services.state_machine_service import state_machine_service
 from ..services.telemetry_stream_service import telemetry_stream_service
 
@@ -23,6 +24,39 @@ router = APIRouter()
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _publish_queued_telemetry_realtime(
+    *,
+    shipment_id: str,
+    event_id: str,
+    device_id: str,
+    ts: str,
+    metrics: dict,
+    gps: dict | None,
+) -> None:
+    shipment_event_dispatcher.publish(
+        shipment_id,
+        build_realtime_event(
+            event="telemetry-queued",
+            shipment_id=shipment_id,
+            data={
+                "event_id": event_id,
+                "device_id": device_id,
+                "timestamp": ts,
+                "temperature": metrics.get("temperature_c"),
+                "humidity": metrics.get("humidity_pct"),
+                "shock": metrics.get("shock_g"),
+                "tilt_angle": metrics.get("tilt_deg"),
+                "battery_pct": metrics.get("battery_pct"),
+                "latitude": gps.get("lat") if isinstance(gps, dict) else None,
+                "longitude": gps.get("lng") if isinstance(gps, dict) else None,
+                "speed": gps.get("speed_kmh") if isinstance(gps, dict) else None,
+                "heading": gps.get("heading_deg") if isinstance(gps, dict) else None,
+                "stage": "queued",
+            },
+        ),
+    )
 
 
 @router.post(
@@ -173,6 +207,14 @@ async def ingest_telemetry(
         )
     telemetry.ingest_status = "queued"
     db.commit()
+    _publish_queued_telemetry_realtime(
+        shipment_id=payload.shipment_id,
+        event_id=payload.event_id,
+        device_id=payload.device_id,
+        ts=payload.ts,
+        metrics=metrics,
+        gps=payload.gps.model_dump() if payload.gps else None,
+    )
 
     return ApiSuccess(
         data={

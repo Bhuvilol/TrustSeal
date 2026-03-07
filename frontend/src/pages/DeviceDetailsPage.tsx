@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -25,6 +25,25 @@ import {
 import { sensorStatsFromBackend } from '@/utils/compliance';
 import { getErrorMessage } from '@/utils/errors';
 import { formatDate, formatDateTime } from '@/utils/format';
+import { getStoredToken } from '@/utils/token';
+
+function buildWsUrl(shipmentId: string): string {
+  const envWsBase = import.meta.env.VITE_WS_BASE_URL as string | undefined;
+  const envBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
+  const fallbackApiBase = import.meta.env.DEV
+    ? `${window.location.protocol}//${window.location.hostname}:8000`
+    : 'https://trust-seal-1.onrender.com';
+  const apiBase = String(envWsBase || envBase || fallbackApiBase).replace(/\/+$/, '').replace(/\/api\/v1$/i, '');
+  const wsBase = apiBase.replace(/^http/i, 'ws');
+  const tokenEnabled = String(import.meta.env.VITE_WS_SEND_TOKEN || 'false').toLowerCase() === 'true';
+  const token = tokenEnabled ? getStoredToken() : null;
+  const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `${wsBase}/api/v1/ws/shipments/${shipmentId}${tokenQuery}`;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
 
 function DeviceDetailsPage() {
   const navigate = useNavigate();
@@ -79,10 +98,11 @@ function DeviceDetailsPage() {
     staleTime: 30_000,
     gcTime: 5 * 60_000,
   });
+  const [liveTelemetry, setLiveTelemetry] = useState(telemetry ?? []);
 
   const snapshotData = useMemo(
     () =>
-      (telemetry ?? []).slice(-12).map((event) => ({
+      liveTelemetry.slice(-12).map((event) => ({
         label: formatDateTime(event.ts),
         timestamp: event.ts,
         temperature: event.temperature_c ?? 0,
@@ -90,10 +110,90 @@ function DeviceDetailsPage() {
         shock: event.shock_g ?? 0,
         tilt: event.tilt_deg ?? 0,
       })),
-    [telemetry],
+    [liveTelemetry],
   );
   const latestPoint = snapshotData[snapshotData.length - 1];
   const sensorStats = sensorStatsSnapshot ? sensorStatsFromBackend(sensorStatsSnapshot, primaryShipment?.status) : null;
+
+  useEffect(() => {
+    setLiveTelemetry(telemetry ?? []);
+  }, [telemetry]);
+
+  useEffect(() => {
+    const telemetryWsEnabled = String(import.meta.env.VITE_TELEMETRY_WS_ENABLED || 'false').toLowerCase() === 'true';
+    if (!telemetryWsEnabled || !primaryShipment?.id) {
+      return;
+    }
+
+    const socket = new WebSocket(buildWsUrl(primaryShipment.id));
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data) as Record<string, unknown>;
+        const eventName = String(payload.event || '');
+        if (eventName !== 'telemetry-update' && eventName !== 'telemetry-queued') {
+          return;
+        }
+
+        const eventData =
+          payload.data && typeof payload.data === 'object'
+            ? (payload.data as Record<string, unknown>)
+            : payload;
+        const latitude = isFiniteNumber(eventData.latitude) ? eventData.latitude : null;
+        const longitude = isFiniteNumber(eventData.longitude) ? eventData.longitude : null;
+        const recordedAt = String(eventData.timestamp || new Date().toISOString());
+        const eventId = String(
+          eventData.event_id || `ws-${primaryShipment.id}-${recordedAt}-${Math.random().toString(16).slice(2, 8)}`,
+        );
+
+        setLiveTelemetry((curr) => {
+          if (curr.some((row) => row.event_id === eventId)) {
+            return curr;
+          }
+          return [
+            ...curr,
+            {
+              event_id: eventId,
+              shipment_id: String(payload.shipment_id || primaryShipment.id),
+              device_id: String(eventData.device_id || primaryShipment.device_id),
+              ts: recordedAt,
+              seq_no: 0,
+              temperature_c: isFiniteNumber(eventData.temperature) ? eventData.temperature : null,
+              humidity_pct: isFiniteNumber(eventData.humidity) ? eventData.humidity : null,
+              shock_g: isFiniteNumber(eventData.shock) ? eventData.shock : null,
+              light_lux: null,
+              tilt_deg: isFiniteNumber(eventData.tilt_angle) ? eventData.tilt_angle : null,
+              gps:
+                latitude !== null && longitude !== null
+                  ? {
+                      lat: latitude,
+                      lng: longitude,
+                      speed_kmh: isFiniteNumber(eventData.speed) ? eventData.speed : undefined,
+                      heading_deg: isFiniteNumber(eventData.heading) ? eventData.heading : undefined,
+                    }
+                  : null,
+              battery_pct: isFiniteNumber(eventData.battery_pct) ? eventData.battery_pct : null,
+              network_type: eventName === 'telemetry-queued' ? 'redis-queued' : 'persisted',
+              firmware_version: null,
+              bundle_id: null,
+              payload_hash: `ws-${Math.random().toString(16).slice(2, 10)}`,
+              signature: null,
+              verification_status: null,
+              ingest_status: eventName === 'telemetry-queued' ? 'queued' : 'persisted',
+              created_at: recordedAt,
+            },
+          ].slice(-200);
+        });
+      } catch {
+        // ignore malformed realtime events
+      }
+    };
+
+    return () => {
+      if (socket.readyState <= WebSocket.OPEN) {
+        socket.close();
+      }
+    };
+  }, [primaryShipment?.device_id, primaryShipment?.id]);
 
   if (!deviceId) {
     return <ErrorState message="Device ID is missing." />;
