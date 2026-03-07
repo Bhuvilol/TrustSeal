@@ -20,7 +20,9 @@ def _forward_headers(
     authorization: str | None,
     content_type: str | None,
     device_id: str | None = None,
+    device_token: str | None = None,
     verifier_device_id: str | None = None,
+    verifier_token: str | None = None,
 ) -> dict[str, str]:
     headers: dict[str, str] = {}
     if authorization:
@@ -29,8 +31,12 @@ def _forward_headers(
         headers["Content-Type"] = content_type
     if device_id:
         headers["X-Device-Id"] = device_id
+    if device_token:
+        headers["X-Device-Token"] = device_token
     if verifier_device_id:
         headers["X-Verifier-Device-Id"] = verifier_device_id
+    if verifier_token:
+        headers["X-Verifier-Token"] = verifier_token
     return headers
 
 
@@ -69,6 +75,7 @@ async def bridge_telemetry(
     authorization: str | None = Header(default=None),
     content_type: str | None = Header(default="application/json"),
     x_device_id: str | None = Header(default=None),
+    x_device_token: str | None = Header(default=None),
 ) -> Response:
     body = await request.body()
     return await _forward_json(
@@ -78,6 +85,7 @@ async def bridge_telemetry(
             authorization=authorization,
             content_type=content_type,
             device_id=x_device_id,
+            device_token=x_device_token,
         ),
     )
 
@@ -88,6 +96,7 @@ async def bridge_custody(
     authorization: str | None = Header(default=None),
     content_type: str | None = Header(default="application/json"),
     x_verifier_device_id: str | None = Header(default=None),
+    x_verifier_token: str | None = Header(default=None),
 ) -> Response:
     body = await request.body()
     return await _forward_json(
@@ -97,6 +106,7 @@ async def bridge_custody(
             authorization=authorization,
             content_type=content_type,
             verifier_device_id=x_verifier_device_id,
+            verifier_token=x_verifier_token,
         ),
     )
 

@@ -34,10 +34,10 @@
 #define MODEM_APN_PASS ""
 
 // HTTP ingest target (modem client)
-#define VERIFIER_API_HOST "https://trustseal.onrender.com"
+#define VERIFIER_API_HOST "trustseal.onrender.com"
 #define VERIFIER_API_PORT 80
 #define VERIFIER_API_PATH "/api/v1/ingest/custody"
-#define VERIFIER_API_BEARER_TOKEN "HLiUuqINiHTNX0fkaFnDcqgMR+wL7p30Y6pGWEvMuqA="
+#define VERIFIER_API_BEARER_TOKEN ""
 
 // Retry/backoff
 #define CUSTODY_RETRY_BASE_MS 5000

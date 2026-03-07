@@ -28,6 +28,8 @@ interface LiveTelemetryModuleProps {
   origin?: string;
   destination?: string;
   status?: ShipmentStatus;
+  onRealtimeShipmentStatus?: (status: ShipmentStatus) => void;
+  onRealtimeEvent?: (eventName: string) => void;
 }
 
 const historyLayer: LayerProps = {
@@ -92,10 +94,20 @@ function LiveTelemetryModule({
   origin,
   destination,
   status,
+  onRealtimeShipmentStatus,
+  onRealtimeEvent,
 }: LiveTelemetryModuleProps) {
   const [telemetry, setTelemetry] = useState<TelemetryEvent[]>([...initialTelemetry].slice(-maxPoints));
   const [rangeMode, setRangeMode] = useState<RangeMode>('full');
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>('connecting');
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const [liveShipmentStatus, setLiveShipmentStatus] = useState<ShipmentStatus | undefined>(status);
+  const [lastRealtimeEvent, setLastRealtimeEvent] = useState<{
+    label: string;
+    detail: string;
+    tone: 'neutral' | 'success';
+    occurredAt: string;
+  } | null>(null);
   const [autoCenter, setAutoCenter] = useState(true);
   const [showHistory, setShowHistory] = useState(true);
   const [showPopup, setShowPopup] = useState(false);
@@ -110,10 +122,12 @@ function LiveTelemetryModule({
   const telemetryWsEnabled = String(import.meta.env.VITE_TELEMETRY_WS_ENABLED || 'false').toLowerCase() === 'true';
 
   useEffect(() => setTelemetry([...initialTelemetry].slice(-maxPoints)), [initialTelemetry, maxPoints]);
+  useEffect(() => setLiveShipmentStatus(status), [status]);
 
   useEffect(() => {
     if (!telemetryWsEnabled) {
       setRealtimeStatus('offline');
+      setReconnectAttempts(0);
       return;
     }
 
@@ -131,16 +145,20 @@ function LiveTelemetryModule({
       wsRef.current = socket;
       socket.onopen = () => {
         reconnectAttemptRef.current = 0;
+        setReconnectAttempts(0);
         setRealtimeStatus('live');
       };
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data) as Record<string, unknown>;
           const eventName = String(payload.event || '');
+          const eventData =
+            payload.data && typeof payload.data === 'object'
+              ? (payload.data as Record<string, unknown>)
+              : payload;
 
           if (eventName === 'sensor_log.created') {
-            const data = payload.data as Record<string, unknown> | undefined;
-            const log = data?.log as Record<string, unknown> | undefined;
+            const log = eventData.log as Record<string, unknown> | undefined;
             if (!log) return;
 
             const latitude = finiteNumber(log.latitude) ? log.latitude : null;
@@ -175,35 +193,43 @@ function LiveTelemetryModule({
             };
 
             setTelemetry((curr) => [...curr, entry].slice(-maxPoints));
+            setLastRealtimeEvent({
+              label: 'Legacy sensor log received',
+              detail: 'A sensor log was published through the compatibility realtime channel.',
+              tone: 'neutral',
+              occurredAt: recordedAt,
+            });
+            onRealtimeEvent?.(eventName);
             return;
           }
 
           if (eventName === 'telemetry-update') {
-            const latitude = finiteNumber(payload.latitude) ? payload.latitude : null;
-            const longitude = finiteNumber(payload.longitude) ? payload.longitude : null;
-            if (latitude === null || longitude === null) return;
-
-            const recordedAt = String(payload.timestamp || new Date().toISOString());
+            const latitude = finiteNumber(eventData.latitude) ? eventData.latitude : null;
+            const longitude = finiteNumber(eventData.longitude) ? eventData.longitude : null;
+            const recordedAt = String(eventData.timestamp || new Date().toISOString());
             const entry: TelemetryEvent = {
-              event_id: `ws-${shipmentId}-${recordedAt}-${Math.random().toString(16).slice(2, 8)}`,
+              event_id: String(eventData.event_id || `ws-${shipmentId}-${recordedAt}-${Math.random().toString(16).slice(2, 8)}`),
               shipment_id: String(payload.shipment_id || shipmentId),
-              device_id: String(payload.device_id || 'ws-device'),
+              device_id: String(eventData.device_id || 'ws-device'),
               ts: recordedAt,
               seq_no: 0,
-              temperature_c: finiteNumber(payload.temperature) ? payload.temperature : null,
-              humidity_pct: finiteNumber(payload.humidity) ? payload.humidity : null,
-              shock_g: finiteNumber(payload.shock) ? payload.shock : null,
+              temperature_c: finiteNumber(eventData.temperature) ? eventData.temperature : null,
+              humidity_pct: finiteNumber(eventData.humidity) ? eventData.humidity : null,
+              shock_g: finiteNumber(eventData.shock) ? eventData.shock : null,
               light_lux: null,
-              tilt_deg: finiteNumber(payload.tilt_angle) ? payload.tilt_angle : null,
-              battery_pct: null,
+              tilt_deg: finiteNumber(eventData.tilt_angle) ? eventData.tilt_angle : null,
+              battery_pct: finiteNumber(eventData.battery_pct) ? eventData.battery_pct : null,
               network_type: null,
               firmware_version: null,
-              gps: {
-                lat: latitude,
-                lng: longitude,
-                speed_kmh: finiteNumber(payload.speed) ? payload.speed : undefined,
-                heading_deg: finiteNumber(payload.heading) ? payload.heading : undefined,
-              },
+              gps:
+                latitude !== null && longitude !== null
+                  ? {
+                      lat: latitude,
+                      lng: longitude,
+                      speed_kmh: finiteNumber(eventData.speed) ? eventData.speed : undefined,
+                      heading_deg: finiteNumber(eventData.heading) ? eventData.heading : undefined,
+                    }
+                  : null,
               bundle_id: null,
               payload_hash: `ws-${Math.random().toString(16).slice(2, 10)}`,
               signature: null,
@@ -213,6 +239,44 @@ function LiveTelemetryModule({
             };
 
             setTelemetry((curr) => [...curr, entry].slice(-maxPoints));
+            setLastRealtimeEvent({
+              label: 'Telemetry persisted',
+              detail:
+                latitude !== null && longitude !== null
+                  ? 'Metrics and live coordinates were received from the backend.'
+                  : 'Metrics were received, but this sample did not include GPS coordinates.',
+              tone: 'neutral',
+              occurredAt: recordedAt,
+            });
+            onRealtimeEvent?.(eventName);
+            return;
+          }
+
+          if (eventName === 'shipment.status_changed') {
+            const nextStatus = String(eventData.current_status || '').trim() as ShipmentStatus;
+            if (!nextStatus) return;
+            setLiveShipmentStatus(nextStatus);
+            onRealtimeShipmentStatus?.(nextStatus);
+            setLastRealtimeEvent({
+              label: 'Shipment status changed',
+              detail: `Shipment status is now ${nextStatus.replace('_', ' ')}.`,
+              tone: 'neutral',
+              occurredAt: String(payload.occurred_at || new Date().toISOString()),
+            });
+            onRealtimeEvent?.(eventName);
+            return;
+          }
+
+          if (eventName === 'shipment.settled') {
+            setLiveShipmentStatus('completed');
+            onRealtimeShipmentStatus?.('completed');
+            setLastRealtimeEvent({
+              label: 'Shipment settled',
+              detail: `Settlement confirmed for ${String(eventData.settled_leg_count || 0)} leg(s).`,
+              tone: 'success',
+              occurredAt: String(payload.occurred_at || new Date().toISOString()),
+            });
+            onRealtimeEvent?.(eventName);
           }
         } catch {
           // ignore malformed events
@@ -222,6 +286,7 @@ function LiveTelemetryModule({
       socket.onclose = () => {
         if (unmounted) return;
         reconnectAttemptRef.current += 1;
+        setReconnectAttempts(reconnectAttemptRef.current);
         setRealtimeStatus('reconnecting');
         clearReconnect();
         reconnectTimerRef.current = window.setTimeout(connect, Math.min(10000, reconnectAttemptRef.current * 1000));
@@ -336,6 +401,22 @@ function LiveTelemetryModule({
             <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={fitToRoute}>Fit to Route</button>
           </div>
         </div>
+        {realtimeStatus !== 'live' && (
+          <div
+            className={clsx(
+              'mb-4 rounded-xl border px-4 py-3 text-sm',
+              realtimeStatus === 'offline'
+                ? 'border-slate-700 bg-surface-800/70 text-slate-300'
+                : 'border-amber-300/25 bg-amber-500/10 text-amber-100',
+            )}
+          >
+            {realtimeStatus === 'offline'
+              ? 'Realtime websocket updates are disabled for this environment. Historical telemetry is still available.'
+              : realtimeStatus === 'connecting'
+                ? 'Connecting to the shipment websocket stream.'
+                : `Realtime connection dropped. Reconnect attempt ${reconnectAttempts} is in progress.`}
+          </div>
+        )}
         <div className="mb-4 flex flex-wrap gap-2 text-xs text-slate-300">
           <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1"><Wifi className="h-3.5 w-3.5 text-cyan-200" /><span className="font-semibold text-slate-100">1</span><span className="text-slate-400">Devices linked</span></span>
           <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1"><Route className="h-3.5 w-3.5 text-cyan-200" /><span className="font-semibold text-slate-100">On-chain</span><span className="text-slate-400">Custody hash</span></span>
@@ -361,8 +442,24 @@ function LiveTelemetryModule({
               <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Live Summary</p>
               <div className="mt-3 space-y-3">
                 <div className="flex items-center justify-between"><span className="text-slate-400">Current leg</span><span className="font-semibold">{(legs.find((x) => x.status === 'in_progress') || legs.at(-1)) ? `Leg ${(legs.find((x) => x.status === 'in_progress') || legs.at(-1))?.leg_number}` : 'N/A'}</span></div>
-                <div className="flex items-center justify-between"><span className="text-slate-400">Shipment status</span><span className="font-semibold">{status ?? 'N/A'}</span></div>
+                <div className="flex items-center justify-between"><span className="text-slate-400">Shipment status</span><span className="font-semibold">{liveShipmentStatus ?? 'N/A'}</span></div>
                 <div className="flex items-center justify-between"><span className="text-slate-400">Last update</span><span className="font-semibold">{latest ? formatDateTime(latest.ts) : 'Awaiting data'}</span></div>
+                {lastRealtimeEvent && (
+                  <div
+                    className={clsx(
+                      'rounded-lg border p-3 text-xs',
+                      lastRealtimeEvent.tone === 'success'
+                        ? 'border-emerald-300/25 bg-emerald-500/10 text-emerald-100'
+                        : 'border-slate-700/70 bg-surface-900/80 text-slate-300',
+                    )}
+                  >
+                    <p className="font-semibold">{lastRealtimeEvent.label}</p>
+                    <p className="mt-1">{lastRealtimeEvent.detail}</p>
+                    <p className="mt-2 text-[11px] uppercase tracking-[0.12em] opacity-80">
+                      {formatDateTime(lastRealtimeEvent.occurredAt)}
+                    </p>
+                  </div>
+                )}
                 <div className="rounded-lg border border-slate-700/70 bg-surface-900/80 p-3 text-xs text-slate-300"><p className="font-semibold text-slate-100">Origin to Destination</p><p className="mt-1">{origin || 'Unknown'} to {destination || 'Unknown'}</p></div>
                 {!!legs.length && <div className="space-y-2 text-xs text-slate-300"><p className="font-semibold text-slate-100">Shipment legs</p><div className="flex flex-wrap gap-2">{legs.map((leg) => <span key={leg.id} className={clsx('rounded-full px-3 py-1', leg.status === 'settled' ? 'bg-emerald-400/20 text-emerald-100' : leg.status === 'in_progress' ? 'bg-sky-400/20 text-sky-100' : 'bg-slate-500/20 text-slate-200')}>Leg {leg.leg_number}: {leg.from_location} to {leg.to_location}</span>)}</div></div>}
               </div>

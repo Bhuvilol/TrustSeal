@@ -417,9 +417,8 @@ SendResult post_queued_packet(const String &packet_json) {
   http.post(VERIFIER_API_PATH);
   http.sendHeader("Content-Type", "application/json");
   if (strlen(VERIFIER_API_BEARER_TOKEN) > 0) {
-    http.sendHeader("Authorization", String("Bearer ") + VERIFIER_API_BEARER_TOKEN);
     http.sendHeader("X-Verifier-Device-Id", VERIFIER_DEVICE_ID);
-
+    http.sendHeader("X-Verifier-Token", VERIFIER_API_BEARER_TOKEN);
   }
   http.sendHeader("Content-Length", packet_json.length());
   http.beginBody();

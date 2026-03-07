@@ -1,7 +1,6 @@
 import { motion } from 'framer-motion';
-import { BatteryMedium, Radio, ShieldAlert, ShieldCheck, ShieldX } from 'lucide-react';
+import { BatteryMedium, Cpu, ShieldAlert, ShieldCheck, ShieldX } from 'lucide-react';
 import type { Device } from '@/types';
-import { buildDeviceOverview } from '@/utils/device-intelligence';
 
 interface DeviceCardProps {
   device: Device;
@@ -12,7 +11,7 @@ interface DeviceCardProps {
   deleting?: boolean;
 }
 
-function getStatusVisual(status: ReturnType<typeof buildDeviceOverview>['operationalStatus']) {
+function getStatusVisual(status: Device['status']) {
   if (status === 'active') {
     return {
       label: 'Active',
@@ -23,7 +22,7 @@ function getStatusVisual(status: ReturnType<typeof buildDeviceOverview>['operati
     };
   }
 
-  if (status === 'warning') {
+  if (status === 'maintenance') {
     return {
       label: 'Warning',
       dot: 'bg-amber-300',
@@ -50,8 +49,7 @@ function DeviceCard({
   onDelete,
   deleting,
 }: DeviceCardProps) {
-  const overview = buildDeviceOverview(device);
-  const statusVisual = getStatusVisual(overview.operationalStatus);
+  const statusVisual = getStatusVisual(device.status);
   const StatusIcon = statusVisual.icon;
 
   return (
@@ -79,17 +77,17 @@ function DeviceCard({
 
       <div className="mt-4 grid gap-2 sm:grid-cols-3">
         <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
-          <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Battery</p>
+          <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Battery Pack</p>
           <p className="mt-1 inline-flex items-center gap-1.5 text-base font-semibold text-slate-100">
             <BatteryMedium className="h-4 w-4 text-cyan-200" />
-            {overview.batteryPercent}%
+            {device.battery_capacity_mAh === null ? 'Unknown' : `${device.battery_capacity_mAh} mAh`}
           </p>
         </div>
         <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
-          <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Signal</p>
+          <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Firmware</p>
           <p className="mt-1 inline-flex items-center gap-1.5 text-base font-semibold text-slate-100">
-            <Radio className="h-4 w-4 text-cyan-200" />
-            {overview.signalPercent}%
+            <Cpu className="h-4 w-4 text-cyan-200" />
+            {device.firmware_version}
           </p>
         </div>
         <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">

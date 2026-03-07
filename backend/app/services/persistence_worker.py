@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..models.custody_transfer import CustodyTransfer
 from ..models.telemetry_event import TelemetryEvent
+from .realtime import build_realtime_event, shipment_event_dispatcher
 from .state_machine_service import state_machine_service
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,31 @@ logger = logging.getLogger(__name__)
 
 class PersistenceWorker:
     """Owns queued -> persisted transition."""
+
+    def _publish_telemetry_realtime(self, row: TelemetryEvent) -> None:
+        metrics = row.metrics if isinstance(row.metrics, dict) else {}
+        gps = row.gps if isinstance(row.gps, dict) else {}
+        shipment_event_dispatcher.publish(
+            str(row.shipment_id),
+            build_realtime_event(
+                event="telemetry-update",
+                shipment_id=str(row.shipment_id),
+                data={
+                    "event_id": row.event_id,
+                    "device_id": str(row.device_id),
+                    "timestamp": row.ts.isoformat() if row.ts else None,
+                    "temperature": metrics.get("temperature_c"),
+                    "humidity": metrics.get("humidity_pct"),
+                    "shock": metrics.get("shock_g"),
+                    "tilt_angle": metrics.get("tilt_deg"),
+                    "battery_pct": metrics.get("battery_pct"),
+                    "latitude": gps.get("lat"),
+                    "longitude": gps.get("lng"),
+                    "speed": gps.get("speed_kmh"),
+                    "heading": gps.get("heading_deg"),
+                },
+            ),
+        )
 
     def _parse_uuid(self, value: Any) -> uuid.UUID | None:
         try:
@@ -142,6 +168,7 @@ class PersistenceWorker:
             return False
         row.ingest_status = "persisted"
         db.commit()
+        self._publish_telemetry_realtime(row)
         return True
 
     def mark_custody_persisted(self, db: Session, *, custody_event_id: str) -> bool:

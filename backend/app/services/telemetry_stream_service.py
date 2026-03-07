@@ -41,8 +41,7 @@ class TelemetryStreamService:
         if not self.stream_enabled:
             return
 
-        self._redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
-        self._redis.ping()
+        self._redis = self._build_redis_client()
         self._ensure_consumer_group()
 
         self._stop_event.clear()
@@ -112,10 +111,30 @@ class TelemetryStreamService:
         finally:
             db.close()
 
+    def _build_redis_client(self) -> Redis:
+        redis_client = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        redis_client.ping()
+        return redis_client
+
+    def _ensure_redis_client(self) -> Redis | None:
+        if not self.stream_enabled:
+            return None
+        if self._redis is not None:
+            return self._redis
+        try:
+            self._redis = self._build_redis_client()
+            self._ensure_consumer_group()
+            return self._redis
+        except Exception:
+            logger.exception("Failed to initialize Redis client for stream service")
+            self._redis = None
+            return None
+
     def _publish_stream_event(self, *, stream_name: str, event_type: str, payload: dict) -> str | None:
         if not self.stream_enabled:
             return None
-        if self._redis is None:
+        redis_client = self._ensure_redis_client()
+        if redis_client is None:
             logger.warning("Stream unavailable; Redis client not initialized for event_type=%s", event_type)
             return None
 
@@ -133,7 +152,7 @@ class TelemetryStreamService:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "payload": json.dumps(normalized, separators=(",", ":"), sort_keys=True),
         }
-        return self._redis.xadd(stream_name, entry)
+        return redis_client.xadd(stream_name, entry)
 
     def _normalize_event_payload(self, *, event_type: str, payload: dict) -> dict | None:
         shipment_id = str(payload.get("shipment_id") or "").strip()

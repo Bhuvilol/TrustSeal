@@ -6,6 +6,7 @@ import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..core.config import settings
@@ -18,6 +19,14 @@ logger = logging.getLogger(__name__)
 
 class BatchWorker:
     """Owns persisted -> bundled and open -> finalized transitions."""
+
+    @staticmethod
+    def _normalize_timestamp(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     def _pending_rows(self, db: Session, *, shipment_uuid: uuid.UUID) -> list[TelemetryEvent]:
         return (
@@ -61,7 +70,7 @@ class BatchWorker:
             )
             return self.finalize_shipment_batch(db, shipment_id=shipment_id)
 
-        oldest_ts = rows[0].ts
+        oldest_ts = self._normalize_timestamp(rows[0].ts)
         if oldest_ts is None:
             return None
         max_window = max(1, settings.BATCH_MAX_WINDOW_SECONDS)
@@ -124,7 +133,21 @@ class BatchWorker:
             status="open",
         )
         db.add(batch)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            logger.warning(
+                "Batch finalize raced on epoch allocation shipment_id=%s epoch=%s; returning latest batch",
+                shipment_id,
+                next_epoch,
+            )
+            return (
+                db.query(TelemetryBatch)
+                .filter(TelemetryBatch.shipment_id == shipment_uuid)
+                .order_by(TelemetryBatch.epoch.desc())
+                .first()
+            )
 
         for row in rows:
             transition = state_machine_service.ensure_transition(

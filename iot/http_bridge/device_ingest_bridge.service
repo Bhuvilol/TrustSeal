@@ -1,0 +1,17 @@
+[Unit]
+Description=TrustSeal Device HTTP Bridge
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/trustseal-http-bridge
+Environment=BRIDGE_BACKEND_BASE_URL=https://trustseal.onrender.com
+Environment=BRIDGE_HOST=0.0.0.0
+Environment=BRIDGE_PORT=80
+ExecStart=/opt/trustseal-http-bridge/.venv/bin/python /opt/trustseal-http-bridge/device_ingest_bridge.py
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

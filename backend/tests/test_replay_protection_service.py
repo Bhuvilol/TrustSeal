@@ -54,3 +54,22 @@ def test_custody_replay_rejects_non_monotonic_timestamp_order() -> None:
         ts=latest - timedelta(seconds=1),
     )
     assert reason == "REPLAY_TIMESTAMP_ORDER"
+
+
+def test_telemetry_replay_handles_naive_db_timestamp() -> None:
+    db = MagicMock()
+    q1 = MagicMock()
+    q2 = MagicMock()
+    db.query.side_effect = [q1, q2]
+    q1.filter.return_value.order_by.return_value.first.return_value = None
+    q2.filter.return_value.order_by.return_value.first.return_value = (
+        datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+
+    reason = idempotency_service.telemetry_replay_reason(
+        db,
+        device_id=str(uuid.uuid4()),
+        seq_no=5,
+        ts=datetime.now(timezone.utc),
+    )
+    assert reason in {None, "REPLAY_TIMESTAMP_ORDER"}

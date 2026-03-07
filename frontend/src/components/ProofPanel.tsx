@@ -58,6 +58,12 @@ function ProofPanel({ proof, onRefresh, isRefreshing = false }: ProofPanelProps)
   const ipfsCid = proof.ipfs.cid;
   const txHash = proof.chain.tx_hash;
   const network = proof.chain.network || 'polygon-amoy';
+  const custodyGateSatisfied =
+    proof.status === 'custody_verified' ||
+    proof.status === 'anchor_pending' ||
+    proof.status === 'anchored' ||
+    proof.chain.anchor_status === 'submitted' ||
+    proof.chain.anchor_status === 'confirmed';
 
   const getExplorerUrl = (hash: string) => {
     if (network.includes('amoy')) {
@@ -86,6 +92,56 @@ function ProofPanel({ proof, onRefresh, isRefreshing = false }: ProofPanelProps)
       </div>
 
       <div className="space-y-4">
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-lg border border-slate-700/70 bg-surface-800/60 p-4">
+            <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Proof Linkage</p>
+            <p className="mt-2 text-sm text-slate-300">Bundle to IPFS to chain reference is available end-to-end.</p>
+            <div className="mt-3 space-y-2 text-xs text-slate-300">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Bundle</span>
+                <span className="font-mono">{proof.bundle_id.slice(0, 8)}...</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">IPFS</span>
+                <span className={ipfsCid ? 'text-emerald-300' : 'text-slate-400'}>
+                  {ipfsCid ? 'Linked' : 'Pending'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Chain</span>
+                <span className={txHash ? 'text-emerald-300' : 'text-slate-400'}>
+                  {txHash ? 'Anchored' : 'Pending'}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-700/70 bg-surface-800/60 p-4">
+            <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Custody Gate</p>
+            <div className="mt-3 flex items-center gap-2">
+              {getStatusIcon(custodyGateSatisfied ? 'custody_verified' : null)}
+              <span className={`text-sm font-medium ${custodyGateSatisfied ? 'text-yellow-300' : 'text-slate-300'}`}>
+                {custodyGateSatisfied ? 'Verifier event satisfied' : 'Awaiting valid verifier event'}
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-slate-400">
+              Anchoring is only expected after a valid verifier-side custody approval reaches the pipeline.
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-700/70 bg-surface-800/60 p-4">
+            <p className="text-xs uppercase tracking-[0.14em] text-slate-400">Anchor Health</p>
+            <div className="mt-3 flex items-center gap-2">
+              {getStatusIcon(proof.chain.anchor_status)}
+              <span className={`text-sm font-medium ${getStatusColor(proof.chain.anchor_status)}`}>
+                {formatStatus(proof.chain.anchor_status)}
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-slate-400">
+              Network: {network.replace('-', ' ')}
+              {proof.chain.block_number ? `, block ${proof.chain.block_number.toLocaleString()}` : ''}
+            </p>
+          </div>
+        </div>
+
         {/* Bundle Overview */}
         <div className="rounded-lg border border-slate-700/70 bg-surface-800/60 p-4">
           <div className="mb-3 flex items-center justify-between">

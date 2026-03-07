@@ -83,11 +83,19 @@ Deployment metadata is written to `contract/deployments/<network>.json` and a ba
 
 ## Firmware and Harness
 
-- `iot/tracker/`: tracker firmware scaffold with local SPIFFS queue, signing, cellular transport
-- `iot/verifier/`: verifier firmware scaffold with fingerprint flow, signing, custody queue
-- `iot/harness/`: host-side telemetry and custody simulators plus serial NDJSON validation
+Primary firmware path for device work:
 
-PlatformIO CLI is required to build firmware locally.
+- `iot/tracker_arduino/`: Arduino IDE tracker firmware with signed telemetry, local queueing, modem transport, and header-based ingest auth
+- `iot/verifier_arduino/`: Arduino IDE verifier firmware with fingerprint flow, signed custody packets, local queueing, modem transport, and header-based ingest auth
+- `iot/http_bridge/`: HTTP bridge for Arduino devices when the backend is HTTPS-only
+- `iot/harness/`: host-side telemetry and custody simulators plus smoke-flow validation
+
+Secondary firmware trees still exist during migration:
+
+- `iot/tracker/`
+- `iot/verifier/`
+
+Treat those as secondary scaffolds until the Arduino path is fully proven on hardware. For device bring-up today, use the Arduino firmware folders above.
 
 ## Important Environment Notes
 
@@ -138,7 +146,8 @@ Managed-cloud rollout details: [md/MANAGED_CLOUD_DEPLOYMENT.md](/c:/Users/likug/
 
 - Runtime APIs are now centered on canonical ingest, shipment, proof, and ops endpoints.
 - Deployment snapshots under `contract/deployments/` are intended to stay in repo; Hardhat build outputs are not.
-- Firmware directories still contain dev-only secret placeholders and must be provisioned with real per-device keys before staging or production.
+- Firmware secret headers are placeholders only and must be provisioned with real per-device keys before staging or production.
+- Ingest auth is header-based on the backend (`X-Device-Id` / `X-Device-Token`, `X-Verifier-Device-Id` / `X-Verifier-Token`). Legacy bearer-token sketches are not the canonical ingest contract.
 
 ## Security
 

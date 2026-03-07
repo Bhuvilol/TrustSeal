@@ -12,7 +12,7 @@ This folder implements the Step 23 tracker sensor-read pipeline using:
 - Initializes I2C and analog input.
 - Samples sensors on a fixed interval.
 - Builds unsigned payload JSON and computes `SHA-256` hash.
-- Signs payload hash with `ECDSA secp256r1` (development key in firmware).
+- Signs payload hash with `ECDSA secp256r1` (placeholder key slot in firmware).
 - Buffers signed packets locally in `SPIFFS` queue file.
 - Emits packet JSON to Serial including queue depth.
 
@@ -48,7 +48,7 @@ Before upload, set these in `include/tracker_config.h`:
 - `MODEM_RX_PIN`, `MODEM_TX_PIN`, `MODEM_BAUD` (ESP32 <-> A7670C UART)
 - `MODEM_APN` (Airtel default: `airtelgprs.com`)
 - `TRACKER_API_HOST`, `TRACKER_API_PORT`, `TRACKER_API_PATH`
-- `TRACKER_API_BEARER_TOKEN` (if backend route is auth-protected)
+- `TRACKER_API_BEARER_TOKEN` remains for legacy compatibility only. The backend canonical auth contract is `X-Device-Id` plus `X-Device-Token`.
 
 You should see JSON lines like:
 
@@ -78,7 +78,7 @@ At runtime, queue draining behavior is:
 
 ## Key management note
 
-`include/tracker_secrets.h` currently contains a development private key only. Replace it with per-device provisioned keys before real deployment.
+`include/tracker_secrets.h` is now a placeholder only. Provision a real per-device private key and pubkey identifier before real deployment.
 
 ## Next Step
 

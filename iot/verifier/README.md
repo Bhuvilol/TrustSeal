@@ -31,7 +31,7 @@ Before upload, set these in `include/verifier_config.h`:
 
 - `MODEM_APN` (Airtel default: `airtelgprs.com`)
 - `VERIFIER_API_HOST`, `VERIFIER_API_PORT`, `VERIFIER_API_PATH`
-- `VERIFIER_API_BEARER_TOKEN` (if backend route is auth-protected)
+- `VERIFIER_API_BEARER_TOKEN` remains for legacy compatibility only. The backend canonical auth contract is `X-Verifier-Device-Id` plus `X-Verifier-Token`.
 
 ## Build/Flash
 
@@ -57,7 +57,7 @@ pio device monitor
 
 ## Security note
 
-`include/verifier_secrets.h` contains a development key only. Replace with per-device provisioned key before production.
+`include/verifier_secrets.h` is now a placeholder only. Provision a real per-device private key before production.
 
 ## Next step
 

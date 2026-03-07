@@ -1,13 +1,14 @@
 #include <Arduino.h>
+#include <time.h>
 #include <ArduinoJson.h>
 #include <Adafruit_Fingerprint.h>
 #include <HardwareSerial.h>
 #include <FS.h>
 #include <SPIFFS.h>
 #include <deque>
-#define TINY_GSM_MODEM_A7672X
-#include <TinyGsmClient.h>
-#include <ArduinoHttpClient.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 
 #include <mbedtls/base64.h>
 #include <mbedtls/ctr_drbg.h>
@@ -25,21 +26,21 @@ enum class SendResult {
 };
 
 HardwareSerial SerialFP(1);
-HardwareSerial SerialAT(2);
 Adafruit_Fingerprint finger(&SerialFP);
-TinyGsm modem(SerialAT);
-TinyGsmClient modem_client(modem);
+WiFiClient wifi_client;
+WiFiClientSecure wifi_secure_client;
 
 bool fingerprint_ok = false;
 bool signer_ok = false;
 bool spiffs_ok = false;
-bool modem_ready = false;
+bool wifi_ready = false;
 uint32_t custody_seq = 0;
 unsigned long last_scan_ms = 0;
 unsigned long last_send_ms = 0;
-unsigned long last_modem_attempt_ms = 0;
+unsigned long last_wifi_attempt_ms = 0;
 unsigned long next_retry_after_ms = 0;
 unsigned long retry_backoff_ms = CUSTODY_RETRY_BASE_MS;
+String serial_command_buffer;
 
 mbedtls_pk_context signer_key;
 mbedtls_entropy_context signer_entropy;
@@ -57,8 +58,10 @@ String bytes_to_hex(const uint8_t *bytes, const size_t len) {
 }
 
 String now_iso_utc() {
-  const time_t base_epoch_2026 = 1767225600;
-  const time_t now = base_epoch_2026 + static_cast<time_t>(millis() / 1000);
+  const time_t now = time(nullptr);
+  if (now < 1700000000) {
+    return "1970-01-01T00:00:00Z";
+  }
   struct tm utc_tm;
   gmtime_r(&now, &utc_tm);
   char ts[32];
@@ -130,6 +133,59 @@ String sha256_hex(const String &payload) {
   return bytes_to_hex(hash_bytes, sizeof(hash_bytes));
 }
 
+String json_escape_string(const String &input) {
+  String out;
+  out.reserve(input.length() + 8);
+  for (size_t i = 0; i < input.length(); i++) {
+    const char c = input[i];
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '"': out += "\\\""; break;
+      case '\b': out += "\\b"; break;
+      case '\f': out += "\\f"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default: out += c; break;
+    }
+  }
+  return out;
+}
+
+String build_custody_approval_canonical_json(
+  const String &event_id,
+  const String &ts,
+  const char *fingerprint_result,
+  const int confidence,
+  const int template_id
+) {
+  String json = "{";
+  json += "\"custody_event_id\":\"" + json_escape_string(event_id) + "\",";
+  json += "\"digital_signer_address\":\"" + String(VERIFIER_SIGNER_ADDRESS) + "\",";
+  json += "\"fingerprint_result\":\"" + String(fingerprint_result) + "\",";
+  if (confidence >= 0) {
+    char score_buf[16];
+    snprintf(score_buf, sizeof(score_buf), "%.1f", static_cast<float>(confidence));
+    json += "\"fingerprint_score\":" + String(score_buf) + ",";
+  } else {
+    json += "\"fingerprint_score\":null,";
+  }
+  if (template_id >= 0) {
+    json += "\"fingerprint_template_id\":\"" + String(template_id) + "\",";
+  } else {
+    json += "\"fingerprint_template_id\":null,";
+  }
+  json += "\"idempotency_key\":\"" + json_escape_string(event_id) + "\",";
+  json += "\"leg_id\":\"" + String(VERIFIER_LEG_ID) + "\",";
+  json += "\"shipment_id\":\"" + String(VERIFIER_SHIPMENT_ID) + "\",";
+  json += "\"sig_alg\":\"ecdsa-secp256r1\",";
+  json += "\"ts\":\"" + json_escape_string(ts) + "\",";
+  json += "\"verifier_device_id\":\"" + String(VERIFIER_DEVICE_ID) + "\",";
+  json += "\"verifier_user_id\":\"" + String(VERIFIER_USER_ID) + "\"";
+  json += "}";
+  return json;
+}
+
 bool sign_hash_hex(const String &hash_hex, String &signature_b64) {
   if (!signer_ok || hash_hex.length() != 64) {
     return false;
@@ -197,33 +253,51 @@ void init_fingerprint() {
   fingerprint_ok = finger.verifyPassword();
 }
 
-void init_modem() {
-  SerialAT.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX_PIN, MODEM_TX_PIN);
-  delay(300);
-  modem_ready = modem.restart();
-  if (!modem_ready) return;
-  modem_ready = modem.waitForNetwork(30000);
-  if (!modem_ready) return;
-  modem_ready = modem.gprsConnect(MODEM_APN, MODEM_APN_USER, MODEM_APN_PASS);
+bool sync_time_from_wifi() {
+  configTime(0, 0, VERIFIER_NTP_SERVER_1, VERIFIER_NTP_SERVER_2);
+  const unsigned long start = millis();
+  while (millis() - start < 15000) {
+    const time_t now = time(nullptr);
+    if (now >= 1700000000) {
+      return true;
+    }
+    delay(250);
+  }
+  return false;
 }
 
-void ensure_modem_connected() {
-  if (!modem_ready) {
-    const unsigned long now = millis();
-    if (now - last_modem_attempt_ms < 10000) {
+void init_wifi() {
+  if (strlen(VERIFIER_WIFI_SSID) == 0) {
+    wifi_ready = false;
+    return;
+  }
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(VERIFIER_WIFI_SSID, VERIFIER_WIFI_PASSWORD);
+  const unsigned long start = millis();
+  while (millis() - start < 15000) {
+    if (WiFi.status() == WL_CONNECTED) {
+      wifi_ready = true;
       return;
     }
-    last_modem_attempt_ms = now;
-    init_modem();
+    delay(250);
+  }
+  wifi_ready = false;
+}
+
+void ensure_wifi_connected() {
+  if (WiFi.status() == WL_CONNECTED) {
+    wifi_ready = true;
     return;
   }
-  if (!modem.isNetworkConnected()) {
-    modem_ready = false;
+  wifi_ready = false;
+  const unsigned long now = millis();
+  if (now - last_wifi_attempt_ms < 10000) {
     return;
   }
-  if (!modem.isGprsConnected()) {
-    modem_ready = modem.gprsConnect(MODEM_APN, MODEM_APN_USER, MODEM_APN_PASS);
-  }
+  last_wifi_attempt_ms = now;
+  WiFi.disconnect(true, true);
+  delay(100);
+  init_wifi();
 }
 
 void print_boot_status() {
@@ -231,9 +305,20 @@ void print_boot_status() {
   Serial.printf("R307S: %s\n", fingerprint_ok ? "ok" : "not_found_or_locked");
   Serial.printf("ECDSA signer: %s\n", signer_ok ? "ok" : "failed");
   Serial.printf("SPIFFS: %s\n", spiffs_ok ? "ok" : "failed");
-  Serial.printf("Modem network: %s\n", modem_ready ? "connected" : "not_connected");
-  Serial.printf("APN: %s\n", MODEM_APN);
-  Serial.printf("API: http://%s:%d%s\n", VERIFIER_API_HOST, VERIFIER_API_PORT, VERIFIER_API_PATH);
+  Serial.printf("WiFi: %s\n", wifi_ready ? "connected" : "not_connected");
+  Serial.printf("SSID: %s\n", strlen(VERIFIER_WIFI_SSID) > 0 ? VERIFIER_WIFI_SSID : "<unset>");
+  if (wifi_ready) {
+    Serial.printf("WiFi local IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("WiFi gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+  }
+  Serial.printf(
+    "API: %s://%s:%d%s\n",
+    VERIFIER_API_USE_TLS ? "https" : "http",
+    VERIFIER_API_HOST,
+    VERIFIER_API_PORT,
+    VERIFIER_API_PATH
+  );
+  Serial.println("Serial commands: enroll <id>, delete <id>, empty, count");
 }
 
 std::deque<String> read_queue_lines() {
@@ -300,31 +385,15 @@ String build_and_sign_custody_packet(const char *fingerprint_result, const int c
   const uint32_t seq = ++custody_seq;
   const String event_id = next_custody_event_id(seq);
   const String ts = now_iso_utc();
+  const int normalized_confidence = confidence < 0 ? confidence : min(confidence, 100);
 
-  StaticJsonDocument<768> canonical;
-  canonical["custody_event_id"] = event_id;
-  canonical["shipment_id"] = VERIFIER_SHIPMENT_ID;
-  canonical["leg_id"] = VERIFIER_LEG_ID;
-  canonical["verifier_device_id"] = VERIFIER_DEVICE_ID;
-  canonical["verifier_user_id"] = VERIFIER_USER_ID;
-  canonical["ts"] = ts;
-  canonical["fingerprint_result"] = fingerprint_result;
-  canonical["digital_signer_address"] = VERIFIER_SIGNER_ADDRESS;
-  canonical["sig_alg"] = "ecdsa-secp256r1";
-  canonical["idempotency_key"] = event_id;
-  if (confidence >= 0) {
-    canonical["fingerprint_score"] = confidence;
-  } else {
-    canonical["fingerprint_score"] = nullptr;
-  }
-  if (template_id >= 0) {
-    canonical["fingerprint_template_id"] = String(template_id);
-  } else {
-    canonical["fingerprint_template_id"] = nullptr;
-  }
-
-  String canonical_json;
-  serializeJson(canonical, canonical_json);
+  const String canonical_json = build_custody_approval_canonical_json(
+    event_id,
+    ts,
+    fingerprint_result,
+    normalized_confidence,
+    template_id
+  );
   const String approval_hash = sha256_hex(canonical_json);
 
   String signature_b64;
@@ -343,8 +412,8 @@ String build_and_sign_custody_packet(const char *fingerprint_result, const int c
   packet["signature"] = signature_ok ? signature_b64 : "";
   packet["sig_alg"] = "ecdsa-secp256r1";
   packet["idempotency_key"] = event_id;
-  if (confidence >= 0) {
-    packet["fingerprint_score"] = confidence;
+  if (normalized_confidence >= 0) {
+    packet["fingerprint_score"] = normalized_confidence;
   } else {
     packet["fingerprint_score"] = nullptr;
   }
@@ -367,6 +436,7 @@ void queue_custody_event(const char *fingerprint_result, const int confidence, c
   log_doc["fingerprint_result"] = fingerprint_result;
   log_doc["buffered"] = buffered;
   log_doc["queue_depth"] = static_cast<uint32_t>(queue_depth());
+  log_doc["ts"] = now_iso_utc();
   serializeJson(log_doc, Serial);
   Serial.println();
 }
@@ -398,28 +468,169 @@ void scan_fingerprint_once() {
   queue_custody_event("error", -1, -1);
 }
 
+bool wait_for_image(const unsigned long timeout_ms) {
+  const unsigned long start = millis();
+  while (millis() - start < timeout_ms) {
+    const uint8_t img = finger.getImage();
+    if (img == FINGERPRINT_OK) {
+      return true;
+    }
+    if (img != FINGERPRINT_NOFINGER) {
+      return false;
+    }
+    delay(50);
+  }
+  return false;
+}
+
+bool wait_for_finger_release(const unsigned long timeout_ms) {
+  const unsigned long start = millis();
+  while (millis() - start < timeout_ms) {
+    const uint8_t img = finger.getImage();
+    if (img == FINGERPRINT_NOFINGER) {
+      return true;
+    }
+    delay(50);
+  }
+  return false;
+}
+
+bool enroll_fingerprint(const int id) {
+  if (!fingerprint_ok || id <= 0 || id > 127) {
+    return false;
+  }
+
+  Serial.printf("Enroll: place finger for ID %d\n", id);
+  if (!wait_for_image(15000)) {
+    Serial.println("Enroll: first capture timeout");
+    return false;
+  }
+  if (finger.image2Tz(1) != FINGERPRINT_OK) {
+    Serial.println("Enroll: first template conversion failed");
+    return false;
+  }
+
+  Serial.println("Enroll: remove finger");
+  if (!wait_for_finger_release(10000)) {
+    Serial.println("Enroll: finger release timeout");
+    return false;
+  }
+
+  Serial.printf("Enroll: place same finger again for ID %d\n", id);
+  if (!wait_for_image(15000)) {
+    Serial.println("Enroll: second capture timeout");
+    return false;
+  }
+  if (finger.image2Tz(2) != FINGERPRINT_OK) {
+    Serial.println("Enroll: second template conversion failed");
+    return false;
+  }
+  if (finger.createModel() != FINGERPRINT_OK) {
+    Serial.println("Enroll: model creation failed");
+    return false;
+  }
+  if (finger.storeModel(id) != FINGERPRINT_OK) {
+    Serial.println("Enroll: store model failed");
+    return false;
+  }
+
+  Serial.printf("Enroll: success for ID %d\n", id);
+  return true;
+}
+
+void handle_serial_command(const String &command_raw) {
+  String command = command_raw;
+  command.trim();
+  if (command.length() == 0) {
+    return;
+  }
+
+  if (command.equalsIgnoreCase("empty")) {
+    const uint8_t rc = finger.emptyDatabase();
+    Serial.printf("Empty DB: %s\n", rc == FINGERPRINT_OK ? "ok" : "failed");
+    return;
+  }
+
+  if (command.equalsIgnoreCase("count")) {
+    const uint8_t rc = finger.getTemplateCount();
+    if (rc == FINGERPRINT_OK) {
+      Serial.printf("Template count: %d\n", finger.templateCount);
+    } else {
+      Serial.println("Template count: failed");
+    }
+    return;
+  }
+
+  if (command.startsWith("delete ")) {
+    const int id = command.substring(7).toInt();
+    const uint8_t rc = finger.deleteModel(id);
+    Serial.printf("Delete ID %d: %s\n", id, rc == FINGERPRINT_OK ? "ok" : "failed");
+    return;
+  }
+
+  if (command.startsWith("enroll ")) {
+    const int id = command.substring(7).toInt();
+    enroll_fingerprint(id);
+    return;
+  }
+
+  Serial.println("Unknown command. Use: enroll <id>, delete <id>, empty, count");
+}
+
+void process_serial_commands() {
+  while (Serial.available()) {
+    const char c = static_cast<char>(Serial.read());
+    if (c == '\r') {
+      continue;
+    }
+    if (c == '\n') {
+      handle_serial_command(serial_command_buffer);
+      serial_command_buffer = "";
+      continue;
+    }
+    serial_command_buffer += c;
+  }
+}
+
 SendResult post_queued_packet(const String &packet_json) {
-  if (!modem_ready || !modem.isGprsConnected()) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("send: wifi unavailable");
     return SendResult::RetryLater;
   }
 
-  HttpClient http(modem_client, VERIFIER_API_HOST, VERIFIER_API_PORT);
-  http.setHttpResponseTimeout(8000);
-  http.beginRequest();
-  http.post(VERIFIER_API_PATH);
-  http.sendHeader("Content-Type", "application/json");
-  if (strlen(VERIFIER_API_BEARER_TOKEN) > 0) {
-    http.sendHeader("Authorization", String("Bearer ") + VERIFIER_API_BEARER_TOKEN);
-    http.sendHeader("X-Verifier-Device-Id", VERIFIER_DEVICE_ID);
+  HTTPClient http;
+  http.setTimeout(8000);
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  const String url =
+    String(VERIFIER_API_USE_TLS ? "https://" : "http://") +
+    VERIFIER_API_HOST + ":" + String(VERIFIER_API_PORT) + VERIFIER_API_PATH;
+#if VERIFIER_API_USE_TLS
+  wifi_secure_client.setInsecure();
+  if (!http.begin(wifi_secure_client, url)) {
+#else
+  if (!http.begin(wifi_client, url)) {
+#endif
+    Serial.println("send: http begin failed");
+    return SendResult::RetryLater;
   }
-  http.sendHeader("Content-Length", packet_json.length());
-  http.beginBody();
-  http.print(packet_json);
-  http.endRequest();
+  http.addHeader("Content-Type", "application/json");
+  if (strlen(VERIFIER_API_BEARER_TOKEN) > 0) {
+    http.addHeader("X-Verifier-Device-Id", VERIFIER_DEVICE_ID);
+    http.addHeader("X-Verifier-Token", VERIFIER_API_BEARER_TOKEN);
+  }
+  const int status_code = http.POST(packet_json);
+  const String response_body = status_code > 0 ? http.getString() : "";
+  http.end();
 
-  const int status_code = http.responseStatusCode();
-  const String response_body = http.responseBody();
-  http.stop();
+  Serial.printf("send: status=%d\n", status_code);
+  if (status_code < 0) {
+    Serial.print("send: error=");
+    Serial.println(HTTPClient::errorToString(status_code));
+  }
+  if (response_body.length() > 0) {
+    Serial.print("send: body=");
+    Serial.println(response_body);
+  }
 
   if (status_code == 409) return SendResult::Acked;
 
@@ -447,11 +658,18 @@ void process_send_once() {
     pop_queue_head();
     retry_backoff_ms = CUSTODY_RETRY_BASE_MS;
     next_retry_after_ms = 0;
+    Serial.printf("send: acked queue_depth=%u\n", static_cast<unsigned>(queue_depth()));
   } else if (result == SendResult::DropPermanent) {
     pop_queue_head();
+    Serial.printf("send: dropped queue_depth=%u\n", static_cast<unsigned>(queue_depth()));
   } else {
     next_retry_after_ms = millis() + retry_backoff_ms;
     retry_backoff_ms = min(retry_backoff_ms * 2, static_cast<unsigned long>(CUSTODY_RETRY_MAX_MS));
+    Serial.printf(
+      "send: retry_later next_retry_ms=%lu queue_depth=%u\n",
+      retry_backoff_ms,
+      static_cast<unsigned>(queue_depth())
+    );
   }
 }
 
@@ -460,14 +678,22 @@ void setup() {
   delay(500);
   init_signer();
   init_storage();
+  if (spiffs_ok) {
+    SPIFFS.remove(CUSTODY_QUEUE_FILE);
+  }
   init_fingerprint();
-  init_modem();
+  init_wifi();
+  if (wifi_ready) {
+    const bool time_ok = sync_time_from_wifi();
+    Serial.printf("Time sync: %s\n", time_ok ? "ok" : "failed");
+  }
   print_boot_status();
 }
 
 void loop() {
   const unsigned long now = millis();
-  ensure_modem_connected();
+  ensure_wifi_connected();
+  process_serial_commands();
 
   if (now - last_scan_ms >= FP_SCAN_INTERVAL_MS) {
     last_scan_ms = now;

@@ -12,6 +12,14 @@ from ..models.telemetry_event import TelemetryEvent
 
 
 class IdempotencyService:
+    @staticmethod
+    def _normalize_db_timestamp(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
     def telemetry_exists(self, db: Session, *, event_id: str, idempotency_key: str) -> bool:
         by_event_id = db.query(TelemetryEvent.id).filter(TelemetryEvent.event_id == event_id).first()
         if by_event_id:
@@ -68,7 +76,8 @@ class IdempotencyService:
             .order_by(desc(TelemetryEvent.ts))
             .first()
         )
-        if latest_for_ts and ts <= latest_for_ts[0]:
+        latest_ts = self._normalize_db_timestamp(latest_for_ts[0] if latest_for_ts else None)
+        if latest_ts and ts <= latest_ts:
             return "REPLAY_TIMESTAMP_ORDER"
         return None
 
@@ -101,7 +110,8 @@ class IdempotencyService:
             .order_by(desc(CustodyTransfer.ts))
             .first()
         )
-        if latest and ts <= latest[0]:
+        latest_ts = self._normalize_db_timestamp(latest[0] if latest else None)
+        if latest_ts and ts <= latest_ts:
             return "REPLAY_TIMESTAMP_ORDER"
         return None
 

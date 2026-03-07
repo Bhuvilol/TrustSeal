@@ -28,13 +28,18 @@
 #define MODEM_APN_USER ""
 #define MODEM_APN_PASS ""
 
-#define TRACKER_API_HOST "10.112.195.162"
-#define TRACKER_API_PORT 8081
+#define TRACKER_API_HOST "trustseal.onrender.com"
+#define TRACKER_API_PORT 80
 
 #define TRACKER_API_PATH "/api/v1/ingest/telemetry"
-#define TRACKER_API_BEARER_TOKEN "Z8sEl7DdJ/PipQm+0MMm4Pk+IlQXT70WT49nBlV9ePU="
+#define TRACKER_API_BEARER_TOKEN ""
+#define TRACKER_API_USE_TLS 0
 
 #define TELEMETRY_RETRY_BASE_MS 5000
 #define TELEMETRY_RETRY_MAX_MS 60000
+
+#if __has_include("tracker_config.local.h")
+#include "tracker_config.local.h"
+#endif
 
 #endif

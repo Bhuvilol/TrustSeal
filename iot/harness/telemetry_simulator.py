@@ -58,12 +58,16 @@ def main() -> int:
     parser.add_argument("--count", type=int, default=5)
     parser.add_argument("--start-seq", type=int, default=1)
     parser.add_argument("--token", default="", help="Optional bearer token")
+    parser.add_argument("--device-token", default="", help="Optional X-Device-Token value")
     args = parser.parse_args()
 
     url = f"{args.base_url.rstrip('/')}/api/v1/ingest/telemetry"
     headers = {"Content-Type": "application/json"}
     if args.token:
         headers["Authorization"] = f"Bearer {args.token}"
+    if args.device_token:
+        headers["X-Device-Id"] = args.device_id
+        headers["X-Device-Token"] = args.device_token
 
     for i in range(args.count):
         packet = build_packet(

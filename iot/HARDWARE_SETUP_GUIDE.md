@@ -71,16 +71,29 @@ GND       →    GND
 
 ---
 
-## Step 2: Install PlatformIO
+## Step 2: Choose Firmware Workflow
 
-### Option A: VS Code Extension
-1. Install Visual Studio Code
-2. Install "PlatformIO IDE" extension
-3. Restart VS Code
+Primary workflow for current bring-up:
 
-### Option B: CLI
+1. Use Arduino IDE with:
+   - `iot/tracker_arduino/tracker_arduino.ino`
+   - `iot/verifier_arduino/verifier_arduino.ino`
+2. Keep `iot/harness/` available for backend smoke tests before hardware flashing.
+
+PlatformIO trees still exist, but they are not the preferred bring-up path for today.
+
+If your deployed backend is HTTPS-only, run the local bridge first:
+
 ```powershell
-pip install platformio
+python scripts/run_device_bridge.py
+```
+
+Then point both Arduino configs to your laptop LAN IP on port `8081`.
+
+Generate matching local tokens and private keys with:
+
+```powershell
+backend\.venv\Scripts\python.exe scripts/provision_arduino_devices.py
 ```
 
 ---
@@ -89,31 +102,32 @@ pip install platformio
 
 ### 3.1 Edit Configuration
 
-Open `iot/tracker/include/tracker_config.h` and set:
+Open `iot/tracker_arduino/tracker_config.h` and set:
 
 ```cpp
 // Modem Configuration
-#define MODEM_RX_PIN 26
-#define MODEM_TX_PIN 27
+#define MODEM_RX_PIN 16
+#define MODEM_TX_PIN 17
 #define MODEM_BAUD 115200
-#define MODEM_APN "airtelgprs.com"  // Change to your carrier
+#define MODEM_APN "jionet"  // Change to your carrier
 
 // API Configuration
-#define TRACKER_API_HOST "your-server-ip"  // e.g., "192.168.1.100"
-#define TRACKER_API_PORT 8000
+#define TRACKER_API_HOST "your-server-host"
+#define TRACKER_API_PORT 80
 #define TRACKER_API_PATH "/api/v1/ingest/telemetry"
 
-// Optional: Bearer token if auth enabled
-// #define TRACKER_API_BEARER_TOKEN "your-token-here"
+// Legacy bearer-token field still exists in firmware, but backend canonical ingest auth is:
+// X-Device-Id + X-Device-Token
+// Keep real tokens outside committed files.
 ```
 
 ### 3.2 Build and Flash
 
 ```powershell
-cd iot/tracker
-pio run                    # Build firmware
-pio run -t upload          # Flash to ESP32
-pio device monitor         # View serial output
+Open `iot/tracker_arduino/tracker_arduino.ino` in Arduino IDE
+Select the ESP32 board and port
+Upload the sketch
+Open Serial Monitor
 ```
 
 ### 3.3 What to Observe
@@ -143,7 +157,7 @@ Packet dequeued
 
 ### 4.1 Edit Configuration
 
-Open `iot/verifier/include/verifier_config.h` and set:
+Open `iot/verifier_arduino/verifier_config.h` and set:
 
 ```cpp
 // Fingerprint Sensor
@@ -155,11 +169,11 @@ Open `iot/verifier/include/verifier_config.h` and set:
 #define MODEM_RX_PIN 26
 #define MODEM_TX_PIN 27
 #define MODEM_BAUD 115200
-#define MODEM_APN "airtelgprs.com"
+#define MODEM_APN "jionet"
 
 // API Configuration
-#define VERIFIER_API_HOST "your-server-ip"
-#define VERIFIER_API_PORT 8000
+#define VERIFIER_API_HOST "your-server-host"
+#define VERIFIER_API_PORT 80
 #define VERIFIER_API_PATH "/api/v1/ingest/custody"
 ```
 
@@ -173,11 +187,16 @@ Before first use, enroll fingerprints in R307S:
 ### 4.3 Build and Flash
 
 ```powershell
-cd iot/verifier
-pio run
-pio run -t upload
-pio device monitor
+Open `iot/verifier_arduino/verifier_arduino.ino` in Arduino IDE
+Select the ESP32 board and port
+Upload the sketch
+Open Serial Monitor
 ```
+
+Important wiring note:
+- `FP_RX_PIN` / `FP_TX_PIN` are for the R307S fingerprint sensor.
+- `MODEM_RX_PIN` / `MODEM_TX_PIN` are a separate UART for the A7670C modem.
+- Do not put both devices on the same ESP32 pins.
 
 ### 4.4 What to Observe
 
@@ -221,7 +240,8 @@ python telemetry_simulator.py `
   --base-url http://localhost:8000 `
   --shipment-id 11111111-1111-1111-1111-111111111111 `
   --device-id 22222222-2222-2222-2222-222222222222 `
-  --count 5
+  --count 5 `
+  --device-token your-device-token
 ```
 
 **What to Observe**:
@@ -241,7 +261,8 @@ python custody_simulator.py `
   --shipment-id 11111111-1111-1111-1111-111111111111 `
   --leg-id 33333333-3333-3333-3333-333333333333 `
   --verifier-device-id 44444444-4444-4444-4444-444444444444 `
-  --verifier-user-id 55555555-5555-5555-5555-555555555555
+  --verifier-user-id 55555555-5555-5555-5555-555555555555 `
+  --verifier-token your-verifier-token
 ```
 
 **What to Observe**:
@@ -257,7 +278,7 @@ Sending custody event...
 ### 6.1 Check Pipeline Status
 
 ```powershell
-curl -H "Authorization: Bearer <admin-token>" http://localhost:8000/api/v1/ops/pipeline-status
+curl -H "Authorization: Bearer <admin-token>" "http://localhost:8000/api/v1/ops/pipeline-status?shipment_id=<shipment-id>"
 ```
 
 **Look for**:
@@ -401,6 +422,7 @@ Look for complete flow:
 ### Production Settings
 
 - [ ] Change development keys to production keys
+- [ ] Replace placeholder secret headers with provisioned keys
 - [ ] Enable signature verification in backend
 - [ ] Enable device authentication
 - [ ] Set up monitoring and alerts

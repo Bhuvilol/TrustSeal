@@ -18,20 +18,22 @@
 #define CUSTODY_QUEUE_FILE "/custody_queue.ndjson"
 #define CUSTODY_QUEUE_MAX_ENTRIES 200
 
-#define MODEM_BAUD 115200
-#define MODEM_TX_PIN 27
-#define MODEM_RX_PIN 26
-
-#define MODEM_APN "airtelgprs.com"
-#define MODEM_APN_USER ""
-#define MODEM_APN_PASS ""
+#define VERIFIER_WIFI_SSID ""
+#define VERIFIER_WIFI_PASSWORD ""
+#define VERIFIER_NTP_SERVER_1 "pool.ntp.org"
+#define VERIFIER_NTP_SERVER_2 "time.nist.gov"
 
 #define VERIFIER_API_HOST "trustseal.onrender.com"
 #define VERIFIER_API_PORT 80
 #define VERIFIER_API_PATH "/api/v1/ingest/custody"
-#define VERIFIER_API_BEARER_TOKEN "HLiUuqINiHTNX0fkaFnDcqgMR+wL7p30Y6pGWEvMuqA="
+#define VERIFIER_API_BEARER_TOKEN ""
+#define VERIFIER_API_USE_TLS 0
 
 #define CUSTODY_RETRY_BASE_MS 5000
 #define CUSTODY_RETRY_MAX_MS 60000
+
+#if __has_include("verifier_config.local.h")
+#include "verifier_config.local.h"
+#endif
 
 #endif

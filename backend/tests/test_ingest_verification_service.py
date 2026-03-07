@@ -72,41 +72,56 @@ def _build_valid_telemetry() -> TelemetryIngestRequest:
 
 
 def test_verify_telemetry_accepts_valid_packet() -> None:
-    payload = _build_valid_telemetry()
-    result = ingest_verification_service.verify_telemetry(payload)
-    assert result.ok is True
-    assert result.error_code is None
-    assert result.normalized_ts is not None
+    previous_toggle = settings.INGEST_VERIFY_SIGNATURES
+    try:
+        settings.INGEST_VERIFY_SIGNATURES = False
+        payload = _build_valid_telemetry()
+        result = ingest_verification_service.verify_telemetry(payload)
+        assert result.ok is True
+        assert result.error_code is None
+        assert result.normalized_ts is not None
+    finally:
+        settings.INGEST_VERIFY_SIGNATURES = previous_toggle
 
 
 def test_verify_telemetry_rejects_hash_mismatch() -> None:
-    payload = _build_valid_telemetry()
-    payload.payload_hash = "deadbeef"
-    result = ingest_verification_service.verify_telemetry(payload)
-    assert result.ok is False
-    assert result.error_code == "INVALID_PAYLOAD_HASH"
+    previous_toggle = settings.INGEST_VERIFY_SIGNATURES
+    try:
+        settings.INGEST_VERIFY_SIGNATURES = False
+        payload = _build_valid_telemetry()
+        payload.payload_hash = "deadbeef"
+        result = ingest_verification_service.verify_telemetry(payload)
+        assert result.ok is False
+        assert result.error_code == "INVALID_PAYLOAD_HASH"
+    finally:
+        settings.INGEST_VERIFY_SIGNATURES = previous_toggle
 
 
 def test_verify_custody_requires_fingerprint_match() -> None:
-    payload = CustodyIngestRequest(
-        custody_event_id=str(uuid.uuid4()),
-        shipment_id=str(uuid.uuid4()),
-        leg_id=str(uuid.uuid4()),
-        verifier_device_id=str(uuid.uuid4()),
-        verifier_user_id=str(uuid.uuid4()),
-        ts=datetime.now(timezone.utc).isoformat(),
-        fingerprint_result="no_match",
-        fingerprint_score=0.4,
-        fingerprint_template_id="tmp-1",
-        digital_signer_address="0x0000000000000000000000000000000000000000",
-        approval_message_hash="a" * 64,
-        signature="sig",
-        sig_alg="ecdsa-secp256k1",
-        idempotency_key=str(uuid.uuid4()),
-    )
-    result = ingest_verification_service.verify_custody(payload)
-    assert result.ok is False
-    assert result.error_code == "FINGERPRINT_NOT_MATCHED"
+    previous_toggle = settings.INGEST_VERIFY_SIGNATURES
+    try:
+        settings.INGEST_VERIFY_SIGNATURES = False
+        payload = CustodyIngestRequest(
+            custody_event_id=str(uuid.uuid4()),
+            shipment_id=str(uuid.uuid4()),
+            leg_id=str(uuid.uuid4()),
+            verifier_device_id=str(uuid.uuid4()),
+            verifier_user_id=str(uuid.uuid4()),
+            ts=datetime.now(timezone.utc).isoformat(),
+            fingerprint_result="no_match",
+            fingerprint_score=0.4,
+            fingerprint_template_id="tmp-1",
+            digital_signer_address="0x0000000000000000000000000000000000000000",
+            approval_message_hash="a" * 64,
+            signature="sig",
+            sig_alg="ecdsa-secp256k1",
+            idempotency_key=str(uuid.uuid4()),
+        )
+        result = ingest_verification_service.verify_custody(payload)
+        assert result.ok is False
+        assert result.error_code == "FINGERPRINT_NOT_MATCHED"
+    finally:
+        settings.INGEST_VERIFY_SIGNATURES = previous_toggle
 
 
 def test_verify_telemetry_signature_when_enabled() -> None:

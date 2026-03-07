@@ -55,12 +55,16 @@ def main() -> int:
     parser.add_argument("--signer-address", default="0x0000000000000000000000000000000000000000")
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument("--token", default="", help="Optional bearer token")
+    parser.add_argument("--verifier-token", default="", help="Optional X-Verifier-Token value")
     args = parser.parse_args()
 
     url = f"{args.base_url.rstrip('/')}/api/v1/ingest/custody"
     headers = {"Content-Type": "application/json"}
     if args.token:
         headers["Authorization"] = f"Bearer {args.token}"
+    if args.verifier_token:
+        headers["X-Verifier-Device-Id"] = args.verifier_device_id
+        headers["X-Verifier-Token"] = args.verifier_token
 
     for i in range(args.count):
         packet = build_packet(

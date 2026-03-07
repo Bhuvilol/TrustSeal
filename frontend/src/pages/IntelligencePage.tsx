@@ -36,6 +36,7 @@ function IntelligencePage() {
   } = useQuery({
     queryKey: ['ops', 'pipeline-status'],
     queryFn: () => getPipelineStatus(),
+    enabled: canManageOperations,
     retry: 0,
     staleTime: 20_000,
     gcTime: 2 * 60_000,
@@ -109,17 +110,19 @@ function IntelligencePage() {
     }
   };
 
-  if (shipmentsLoading || pipelineLoading) {
+  if (shipmentsLoading || (canManageOperations && pipelineLoading)) {
     return <LoadingState message="Loading operational intelligence..." />;
   }
 
-  if (shipmentsError || pipelineError) {
+  if (shipmentsError || (canManageOperations && pipelineError)) {
     return (
       <ErrorState
         message={getErrorMessage(pipelineError ? pipelineErrObj : shipmentsErrObj, 'Unable to load intelligence metrics.')}
         onRetry={() => {
           void refetchShipments();
-          void refetchPipeline();
+          if (canManageOperations) {
+            void refetchPipeline();
+          }
         }}
       />
     );
@@ -130,6 +133,15 @@ function IntelligencePage() {
       <EmptyState
         title="No shipments for intelligence analysis"
         description="Create shipments to start monitoring live pipeline risk and proof metrics."
+      />
+    );
+  }
+
+  if (!canManageOperations) {
+    return (
+      <EmptyState
+        title="Operations Access Required"
+        description="This page reads admin-only pipeline and worker telemetry. Sign in with an operations-capable role."
       />
     );
   }
@@ -298,7 +310,7 @@ function IntelligencePage() {
                     <div>
                       <p className="font-medium text-slate-100">{workerName}</p>
                       <p className="mt-1 text-xs text-slate-400">
-                        Running: {String(snapshot.running ?? 'unknown')} • Restarts: {String(snapshot.restart_count ?? 0)}
+                        Running: {String(snapshot.running ?? snapshot.thread_alive ?? 'unknown')} | Status: {String(snapshot.status ?? 'unknown')} | Restarts: {String(snapshot.restart_count ?? 0)}
                       </p>
                     </div>
                     <p className="text-xs text-slate-400">Heartbeat: {snapshot.last_heartbeat || 'N/A'}</p>

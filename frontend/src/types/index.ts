@@ -344,7 +344,10 @@ export interface DeadLetterReprocessResponse {
 }
 
 export interface WorkerSnapshot {
+  name?: string;
   running?: boolean;
+  status?: string;
+  thread_alive?: boolean;
   last_heartbeat?: string | null;
   error?: string | null;
   restart_count?: number;

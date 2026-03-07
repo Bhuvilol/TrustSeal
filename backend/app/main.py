@@ -148,8 +148,12 @@ async def health_check():
     # Worker orchestrator status
     worker_status = worker_orchestrator.get_status()
     workers_health = {
-        "enabled": redis_health["enabled"],
-        "status": "ok" if worker_orchestrator.is_healthy() else "degraded",
+        "enabled": settings.RUN_WORKERS,
+        "status": (
+            "disabled"
+            if not settings.RUN_WORKERS
+            else ("ok" if worker_orchestrator.is_healthy() else "degraded")
+        ),
         "workers": worker_status.get("workers", {}),
     }
 

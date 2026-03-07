@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
+pytest-cache-files-*/
 *.db
 .kiro/
 .vscode/
@@ -15,3 +16,8 @@ vite.config.js
 vite.config.d.ts
 contract/artifacts/
 contract/cache/
+iot/**/.pio/
+iot/**/include/*_secrets.h
+iot/**/*.local.h
+keys/
+*.pem

@@ -42,7 +42,7 @@
 
 #define TRACKER_API_PORT 80
 #define TRACKER_API_PATH "/api/v1/ingest/telemetry"
-#define TRACKER_API_BEARER_TOKEN "Z8sEl7DdJ/PipQm+0MMm4Pk+IlQXT70WT49nBlV9ePU="
+#define TRACKER_API_BEARER_TOKEN ""
 
 // Retry/backoff
 #define TELEMETRY_RETRY_BASE_MS 5000

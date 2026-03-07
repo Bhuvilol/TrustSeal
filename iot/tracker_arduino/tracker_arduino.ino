@@ -259,7 +259,13 @@ void print_boot_status() {
   Serial.printf("ECDSA signer: %s\n", signer_ok ? "ok" : "failed");
   Serial.printf("Modem network: %s\n", modem_ready ? "connected" : "not_connected");
   Serial.printf("APN: %s\n", MODEM_APN);
-  Serial.printf("API: http://%s:%d%s\n", TRACKER_API_HOST, TRACKER_API_PORT, TRACKER_API_PATH);
+  Serial.printf(
+    "API: %s://%s:%d%s\n",
+    TRACKER_API_USE_TLS ? "https" : "http",
+    TRACKER_API_HOST,
+    TRACKER_API_PORT,
+    TRACKER_API_PATH
+  );
 }
 
 std::deque<String> read_queue_lines() {
@@ -539,8 +545,8 @@ SendResult post_queued_packet(const String &packet_json) {
   http.post(TRACKER_API_PATH);
   http.sendHeader("Content-Type", "application/json");
   if (strlen(TRACKER_API_BEARER_TOKEN) > 0) {
-    http.sendHeader("Authorization", String("Bearer ") + TRACKER_API_BEARER_TOKEN);
     http.sendHeader("X-Device-Id", TRACKER_DEVICE_ID);
+    http.sendHeader("X-Device-Token", TRACKER_API_BEARER_TOKEN);
   }
   http.sendHeader("Content-Length", packet_json.length());
   http.beginBody();
@@ -615,9 +621,6 @@ void setup() {
 
   init_i2c();
   init_storage();
-  if (spiffs_ok) {
-    SPIFFS.remove(TELEMETRY_QUEUE_FILE);
-  }
   init_sensors();
   init_signer();
   init_modem();

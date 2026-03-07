@@ -1,54 +1,40 @@
 # Device HTTP Bridge
 
-This bridge exists for modem paths that can send plain HTTP but cannot complete HTTPS/TLS reliably.
+Use this when Arduino devices can only send plain HTTP but your real backend is HTTPS-only.
 
-Flow:
+What it does:
+- accepts device HTTP requests on your local machine or edge host
+- forwards them to the real backend over HTTPS
+- preserves TrustSeal ingest headers:
+  - `X-Device-Id`
+  - `X-Device-Token`
+  - `X-Verifier-Device-Id`
+  - `X-Verifier-Token`
 
-- Tracker/Verifier -> `http://<your-laptop-ip>:8081/api/v1/ingest/...`
-- Bridge -> `https://trustseal.onrender.com/api/v1/ingest/...`
+Primary file:
+- [device_ingest_bridge.py](/c:/Users/likug/Downloads/TrustSeal/TrustSeal/iot/http_bridge/device_ingest_bridge.py)
 
-## Run
-
-From the repo root:
-
-```powershell
-cd backend
-.\.venv\Scripts\python ..\iot\http_bridge\device_ingest_bridge.py
-```
-
-Optional environment variables:
+Run it:
 
 ```powershell
 $env:BRIDGE_BACKEND_BASE_URL = "https://trustseal.onrender.com"
+$env:BRIDGE_HOST = "0.0.0.0"
 $env:BRIDGE_PORT = "8081"
+python iot/http_bridge/device_ingest_bridge.py
 ```
 
 Health check:
 
-```text
-http://127.0.0.1:8081/health
+```powershell
+curl http://127.0.0.1:8081/health
 ```
 
-## Tracker settings
+Arduino target pattern:
+- set tracker and verifier `*_API_HOST` to your laptop or bridge host LAN IP
+- set `*_API_PORT` to `8081`
+- keep `*_API_PATH` unchanged
 
-Point the tracker Arduino sketch to your laptop's LAN IP:
-
-- `TRACKER_API_HOST "<your-laptop-ip>"`
-- `TRACKER_API_PORT 8081`
-- `TRACKER_API_PATH "/api/v1/ingest/telemetry"`
-
-Use the same device auth token and headers as before.
-
-## Verifier settings
-
-Point the verifier Arduino sketch to your laptop's LAN IP:
-
-- `VERIFIER_API_HOST "<your-laptop-ip>"`
-- `VERIFIER_API_PORT 8081`
-- `VERIFIER_API_PATH "/api/v1/ingest/custody"`
-
-## Notes
-
-- The bridge forwards `Authorization`, `Content-Type`, `X-Device-Id`, and `X-Verifier-Device-Id`.
-- The real backend remains unchanged.
-- The bridge follows HTTPS redirects upstream.
+Important:
+- the bridge only forwards ingest endpoints
+- dashboard, proof, and ops reads still go directly to the backend/frontend
+- if your devices and laptop are on different networks, this will not work without routing or port exposure

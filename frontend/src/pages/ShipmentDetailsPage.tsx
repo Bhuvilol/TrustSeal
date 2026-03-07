@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import ComplianceCard from '@/components/ComplianceCard';
@@ -62,6 +62,8 @@ function ShipmentDetailsPage() {
   const [pendingShipmentStatus, setPendingShipmentStatus] = useState<ShipmentStatus | null>(null);
   const [pendingOpsAction, setPendingOpsAction] = useState<string | null>(null);
   const [legForm, setLegForm] = useState<LegFormState>(defaultLegForm);
+  const [liveShipmentStatus, setLiveShipmentStatus] = useState<ShipmentStatus | null>(null);
+  const lastTelemetryRefreshRef = useRef(0);
 
   const {
     data: shipment,
@@ -115,7 +117,7 @@ function ShipmentDetailsPage() {
   const { data: pipelineStatus } = useQuery({
     queryKey: ['ops', 'pipeline-status', shipment?.id],
     queryFn: () => getPipelineStatus(shipment?.id as string),
-    enabled: Boolean(shipment?.id),
+    enabled: Boolean(shipment?.id) && canManageOperations,
     retry: 0,
     staleTime: 20_000,
     gcTime: 2 * 60_000,
@@ -142,6 +144,10 @@ function ShipmentDetailsPage() {
     [sensorStatsSnapshot, telemetry, shipment?.status],
   );
   const telemetryRecords = useMemo(() => telemetry ?? [], [telemetry]);
+
+  useEffect(() => {
+    setLiveShipmentStatus(shipment?.status ?? null);
+  }, [shipment?.status]);
 
   if (!shipmentId) {
     return <ErrorState message="Shipment ID is missing from the route." />;
@@ -190,6 +196,32 @@ function ShipmentDetailsPage() {
       queryClient.invalidateQueries({ queryKey: ['ops', 'pipeline-status', shipmentId] }),
       queryClient.invalidateQueries({ queryKey: ['shipments'] }),
     ]);
+  };
+
+  const handleRealtimeEvent = async (eventName: string) => {
+    if (eventName === 'shipment.status_changed' || eventName === 'shipment.settled') {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId] }),
+        queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId, 'overview'] }),
+        queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId, 'legs'] }),
+        queryClient.invalidateQueries({ queryKey: ['proof', 'shipment-latest', shipmentId] }),
+        queryClient.invalidateQueries({ queryKey: ['ops', 'pipeline-status', shipmentId] }),
+        queryClient.invalidateQueries({ queryKey: ['shipments'] }),
+      ]);
+      return;
+    }
+
+    if (eventName === 'telemetry-update') {
+      const now = Date.now();
+      if (now - lastTelemetryRefreshRef.current < 20_000) {
+        return;
+      }
+      lastTelemetryRefreshRef.current = now;
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId, 'sensor-stats'] }),
+        queryClient.invalidateQueries({ queryKey: ['shipment', shipmentId, 'overview'] }),
+      ]);
+    }
   };
 
   const openAddLegForm = () => {
@@ -345,7 +377,7 @@ function ShipmentDetailsPage() {
                 {shipment.origin} {'->'} {shipment.destination}
               </p>
             </div>
-            <StatusBadge kind="shipment" status={shipment.status} />
+            <StatusBadge kind="shipment" status={liveShipmentStatus ?? shipment.status} />
           </div>
         </div>
       </header>
@@ -359,7 +391,7 @@ function ShipmentDetailsPage() {
                 type="button"
                 className="btn-primary px-3 py-2 text-sm"
                 onClick={() => void handleShipmentStatus('in_transit')}
-                disabled={pendingShipmentStatus === 'in_transit' || shipment.status === 'in_transit'}
+                disabled={pendingShipmentStatus === 'in_transit' || (liveShipmentStatus ?? shipment.status) === 'in_transit'}
               >
                 {pendingShipmentStatus === 'in_transit' ? 'Updating...' : 'Mark as In Transit'}
               </button>
@@ -367,7 +399,7 @@ function ShipmentDetailsPage() {
                 type="button"
                 className="btn-primary px-3 py-2 text-sm"
                 onClick={() => void handleShipmentStatus('completed')}
-                disabled={pendingShipmentStatus === 'completed' || shipment.status === 'completed'}
+                disabled={pendingShipmentStatus === 'completed' || (liveShipmentStatus ?? shipment.status) === 'completed'}
               >
                 {pendingShipmentStatus === 'completed' ? 'Updating...' : 'Mark as Completed'}
               </button>
@@ -384,47 +416,45 @@ function ShipmentDetailsPage() {
         </div>
       </section>
 
-      {pipelineStatus?.shipment && (
+      {canManageOperations && pipelineStatus?.shipment && (
         <section className="panel p-5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-slate-100">Pipeline Status</h2>
             <div className="flex flex-wrap items-center gap-2">
-              {canManageOperations && (
-                <>
-                  <button
-                    type="button"
-                    className="btn-secondary px-3 py-2 text-xs"
-                    onClick={() => void handleOpsAction('retry-ipfs')}
-                    disabled={pendingOpsAction !== null}
-                  >
-                    {pendingOpsAction === 'retry-ipfs' ? 'Retrying IPFS...' : 'Retry IPFS'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary px-3 py-2 text-xs"
-                    onClick={() => void handleOpsAction('retry-custody-gate')}
-                    disabled={pendingOpsAction !== null}
-                  >
-                    {pendingOpsAction === 'retry-custody-gate' ? 'Checking custody...' : 'Retry Custody Gate'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary px-3 py-2 text-xs"
-                    onClick={() => void handleOpsAction('retry-anchor')}
-                    disabled={pendingOpsAction !== null}
-                  >
-                    {pendingOpsAction === 'retry-anchor' ? 'Retrying anchor...' : 'Retry Anchor'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary px-3 py-2 text-xs"
-                    onClick={() => void handleOpsAction('reconcile')}
-                    disabled={pendingOpsAction !== null}
-                  >
-                    {pendingOpsAction === 'reconcile' ? 'Reconciling...' : 'Reconcile'}
-                  </button>
-                </>
-              )}
+              <>
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-xs"
+                  onClick={() => void handleOpsAction('retry-ipfs')}
+                  disabled={pendingOpsAction !== null}
+                >
+                  {pendingOpsAction === 'retry-ipfs' ? 'Retrying IPFS...' : 'Retry IPFS'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-xs"
+                  onClick={() => void handleOpsAction('retry-custody-gate')}
+                  disabled={pendingOpsAction !== null}
+                >
+                  {pendingOpsAction === 'retry-custody-gate' ? 'Checking custody...' : 'Retry Custody Gate'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-xs"
+                  onClick={() => void handleOpsAction('retry-anchor')}
+                  disabled={pendingOpsAction !== null}
+                >
+                  {pendingOpsAction === 'retry-anchor' ? 'Retrying anchor...' : 'Retry Anchor'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-xs"
+                  onClick={() => void handleOpsAction('reconcile')}
+                  disabled={pendingOpsAction !== null}
+                >
+                  {pendingOpsAction === 'reconcile' ? 'Reconciling...' : 'Reconcile'}
+                </button>
+              </>
               <span className="text-xs uppercase tracking-[0.14em] text-slate-400">
                 Canonical ops state
               </span>
@@ -524,7 +554,11 @@ function ShipmentDetailsPage() {
           legs={sortedLegs}
           origin={shipment.origin}
           destination={shipment.destination}
-          status={shipment.status}
+          status={liveShipmentStatus ?? shipment.status}
+          onRealtimeShipmentStatus={setLiveShipmentStatus}
+          onRealtimeEvent={(eventName) => {
+            void handleRealtimeEvent(eventName);
+          }}
         />
       </section>
 
