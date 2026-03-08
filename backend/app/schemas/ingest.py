@@ -34,6 +34,8 @@ class TelemetryIngestRequest(BaseModel):
     battery_pct: float | None = Field(default=None, ge=0.0, le=100.0)
     network_type: Literal["cellular", "lte", "2g", "wifi", "ethernet"] | None = None
     firmware_version: str | None = Field(default=None, min_length=1, max_length=64)
+    event_kind: Literal["periodic", "alert"] | None = None
+    alert_reason: Literal["light", "temperature", "humidity", "shock", "tilt"] | None = None
 
     hash_alg: Literal["sha256"]
     payload_hash: str = Field(pattern=r"^[a-fA-F0-9]{64}$")

@@ -44,11 +44,17 @@ def _publish_queued_telemetry_realtime(
                 "event_id": event_id,
                 "device_id": device_id,
                 "timestamp": ts,
+                "seq_no": metrics.get("seq_no"),
                 "temperature": metrics.get("temperature_c"),
                 "humidity": metrics.get("humidity_pct"),
                 "shock": metrics.get("shock_g"),
+                "light_lux": metrics.get("light_lux"),
                 "tilt_angle": metrics.get("tilt_deg"),
                 "battery_pct": metrics.get("battery_pct"),
+                "network_type": metrics.get("network_type"),
+                "firmware_version": metrics.get("firmware_version"),
+                "event_kind": metrics.get("event_kind"),
+                "alert_reason": metrics.get("alert_reason"),
                 "latitude": gps.get("lat") if isinstance(gps, dict) else None,
                 "longitude": gps.get("lng") if isinstance(gps, dict) else None,
                 "speed": gps.get("speed_kmh") if isinstance(gps, dict) else None,
@@ -130,12 +136,17 @@ async def ingest_telemetry(
         )
 
     metrics = {
+        "seq_no": payload.seq_no,
         "temperature_c": payload.temperature_c,
         "humidity_pct": payload.humidity_pct,
         "shock_g": payload.shock_g,
         "light_lux": payload.light_lux,
         "tilt_deg": payload.tilt_deg,
         "battery_pct": payload.battery_pct,
+        "network_type": payload.network_type,
+        "firmware_version": payload.firmware_version,
+        "event_kind": payload.event_kind,
+        "alert_reason": payload.alert_reason,
     }
     telemetry = TelemetryEvent(
         event_id=payload.event_id,

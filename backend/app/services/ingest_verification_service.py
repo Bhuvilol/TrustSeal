@@ -145,6 +145,8 @@ class IngestVerificationService:
             "battery_pct": payload.battery_pct,
             "network_type": payload.network_type,
             "firmware_version": payload.firmware_version,
+            "event_kind": payload.event_kind,
+            "alert_reason": payload.alert_reason,
             "sig_alg": payload.sig_alg,
             "pubkey_id": payload.pubkey_id,
             "idempotency_key": payload.idempotency_key,
@@ -177,6 +179,8 @@ class IngestVerificationService:
             "temperature_c": payload.temperature_c,
             "shock_g": payload.shock_g,
             "tilt_deg": payload.tilt_deg,
+            "event_kind": payload.event_kind,
+            "alert_reason": payload.alert_reason,
         }
         legacy_wire = json.dumps(legacy_canonical, separators=(",", ":")).encode("utf-8")
         legacy_computed = hashlib.sha256(legacy_wire).hexdigest()
